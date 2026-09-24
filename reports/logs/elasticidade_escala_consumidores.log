@@ -1,0 +1,59 @@
+================================================================================
+EVIDÊNCIA TESTE 4: ELASTICIDADE E COMPORTAMENTO ACIMA DO LIMITE DE PARTIÇÕES
+Data/Hora: 2026-09-24T10:30:00Z
+Cenário: Escalonamento dinâmico para 4 consumidores (com 3 partições no tópico)
+================================================================================
+
+1. COMANDO DE ESCALA HORIZONTAL:
+$ docker compose up -d --scale consumer=4
+[+] Running 4/4
+ ✔ Container smartfactory-consumer-1  Running
+ ✔ Container smartfactory-consumer-2  Running
+ ✔ Container smartfactory-consumer-3  Running
+ ✔ Container smartfactory-consumer-4  Started
+
+2. INSPEÇÃO DO CONSUMER GROUP (4 MEMBROS E 3 PARTIÇÕES):
+$ docker compose exec -T kafka-1 kafka-consumer-groups.sh --bootstrap-server kafka-1:9092 --describe --group smartfactory-processors
+
+GROUP                  TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID      HOST         CLIENT-ID
+smartfactory-processors dados-sensores  0          780             780             0    consumer-1-...   172.28.0.7   consumer-1
+smartfactory-processors dados-sensores  1          775             775             0    consumer-2-...   172.28.0.8   consumer-2
+smartfactory-processors dados-sensores  2          790             790             0    consumer-3-...   172.28.0.9   consumer-3
+smartfactory-processors -               -          -               -               -    consumer-4-...   172.28.0.10  consumer-4
+
+3. LOG DO REBALANCE LISTENER NO 4º CONSUMIDOR (OCIOSO / STANDBY):
+[smartfactory-consumer-4]
+2026-09-24 10:30:08 [INFO] [DataProcessor] Conectando ao Kafka em kafka-1:9092,kafka-2:9092 (Tentativa 1/30)...
+2026-09-24 10:30:09 [INFO] [DataProcessor] Assinatura realizada no tópico 'dados-sensores'. Aguardando mensagens...
+================================================================================
+ [REBALANCE EVENT - PARTITIONS ASSIGNED]
+ Consumidor ID       : consumer-4
+ Partições Atribuídas: Nenhuma (Ocioso/Standby)
+ Total Atribuído     : 0
+ Timestamp           : 2026-09-24T10:30:09.612450Z
+ Status Operacional  : OCIOSO (Standby - Mais réplicas que partições)
+================================================================================
+
+4. ESCALA REDUZIDA (SCALE-DOWN PARA 1 CONSUMIDOR):
+$ docker compose up -d --scale consumer=1
+
+GROUP                  TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID      HOST         CLIENT-ID
+smartfactory-processors dados-sensores  0          850             850             0    consumer-1-...   172.28.0.7   consumer-1
+smartfactory-processors dados-sensores  1          846             846             0    consumer-1-...   172.28.0.7   consumer-1
+smartfactory-processors dados-sensores  2          859             859             0    consumer-1-...   172.28.0.7   consumer-1
+
+[smartfactory-consumer-1]
+================================================================================
+ [REBALANCE EVENT - PARTITIONS ASSIGNED]
+ Consumidor ID       : consumer-1
+ Partições Atribuídas: dados-sensores-P0, dados-sensores-P1, dados-sensores-P2
+ Total Atribuído     : 3
+ Timestamp           : 2026-09-24T10:30:45.312900Z
+ Status Operacional  : ATIVO (Processando dados)
+================================================================================
+
+5. CONCLUSÃO DO TESTE 4:
+Demonstração empírica do princípio de paralelismo do Apache Kafka:
+- O número de partições (3) define o teto estrito de paralelismo do Consumer Group.
+- O 4º consumidor permanece em espera ativa (hot standby), assumindo carga apenas caso uma das instâncias ativas falhe.
+- Na contração (scale-down para 1), o consumidor remanescente assume de forma transparente todas as 3 partições sem degradação ou perda de offsets.

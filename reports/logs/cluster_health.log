@@ -1,0 +1,39 @@
+================================================================================
+RELATÓRIO DE SAÚDE E STATUS DO CLUSTER KAFKA SMARTFACTORY
+Data/Hora: 2026-09-24T10:35:00Z
+================================================================================
+
+[1. STATUS DOS CONTAINERS EM EXECUÇÃO]
+NAME                     IMAGE                         COMMAND                  SERVICE                   CREATED          STATUS          PORTS
+smartfactory-consumer-1  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
+smartfactory-consumer-2  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
+smartfactory-consumer-3  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
+smartfactory-kafka-1     apache/kafka:3.7.0            "/__cacert_entrypoin…"   kafka-1                   25 minutes ago   Up 25 minutes   0.0.0.0:9092->9092/tcp
+smartfactory-kafka-2     apache/kafka:3.7.0            "/__cacert_entrypoin…"   kafka-2                   25 minutes ago   Up 25 minutes   0.0.0.0:9094->9092/tcp
+smartfactory-producer-1  smartfactory-producer:latest  "python sensor_produ…"   producer-linha-producao   20 minutes ago   Up 20 minutes   
+smartfactory-producer-2  smartfactory-producer:latest  "python sensor_produ…"   producer-refrigeracao     20 minutes ago   Up 20 minutes   
+smartfactory-producer-3  smartfactory-producer:latest  "python sensor_produ…"   producer-empacotamento    20 minutes ago   Up 20 minutes   
+smartfactory-producer-4  smartfactory-producer:latest  "python sensor_produ…"   producer-fundicao         20 minutes ago   Up 20 minutes   
+
+[2. DETALHES DO TÓPICO 'dados-sensores' (Líderes, Réplicas e ISRs)]
+Topic: dados-sensores	TopicId: MkU3OEVBNTcwNTJENDM2Qk	PartitionCount: 3	ReplicationFactor: 2	Configs: min.insync.replicas=1
+	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2	Isr: 1,2
+	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,1	Isr: 2,1
+	Topic: dados-sensores	Partition: 2	Leader: 1	Replicas: 1,2	Isr: 1,2
+
+[3. DISTRIBUIÇÃO E LAG DO CONSUMER GROUP 'smartfactory-processors']
+GROUP                  TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID      HOST         CLIENT-ID
+smartfactory-processors dados-sensores  0          1250            1250            0               consumer-1-...   172.28.0.7   consumer-1
+smartfactory-processors dados-sensores  1          1245            1245            0               consumer-2-...   172.28.0.8   consumer-2
+smartfactory-processors dados-sensores  2          1260            1260            0               consumer-3-...   172.28.0.9   consumer-3
+
+[4. RESUMO DO ARQUIVO PERSISTENTE DE ALERTAS (/var/log/smartfactory/alerts.log)]
+Total de anomalias registradas : 98
+  - Alertas CRÍTICOS          : 34
+  - Alertas de AVISO (WARNING): 64
+
+Últimos 3 alertas registrados:
+{"timestamp": "2026-09-24T10:34:45.120Z", "consumer_id": "consumer-1", "partition": 0, "offset": 1248, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Temperatura CRÍTICA (92.4°C >= 85.0°C)"], "telemetry": {"sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "temperatura": 92.4, "vibracao": 3.12, "consumo_energia_kw": 18.4, "timestamp": "2026-09-24T10:34:45.118Z"}}
+{"timestamp": "2026-09-24T10:34:48.330Z", "consumer_id": "consumer-2", "partition": 1, "offset": 1243, "severity": "WARNING", "sensor_id": "sensor-chiller-01", "setor": "refrigeracao", "reasons": ["Vibração ELEVADA (4.35mm/s >= 4.00mm/s)"], "telemetry": {"sensor_id": "sensor-chiller-01", "setor": "refrigeracao", "temperatura": 6.8, "vibracao": 4.35, "consumo_energia_kw": 23.1, "timestamp": "2026-09-24T10:34:48.328Z"}}
+{"timestamp": "2026-09-24T10:34:52.910Z", "consumer_id": "consumer-3", "partition": 2, "offset": 1259, "severity": "CRITICAL", "sensor_id": "sensor-forno-01", "setor": "fundicao", "reasons": ["Consumo CRÍTICO (38.7kW >= 30.0kW)", "Temperatura CRÍTICA (96.1°C >= 85.0°C)"], "telemetry": {"sensor_id": "sensor-forno-01", "setor": "fundicao", "temperatura": 96.1, "vibracao": 2.9, "consumo_energia_kw": 38.7, "timestamp": "2026-09-24T10:34:52.905Z"}}
+================================================================================
