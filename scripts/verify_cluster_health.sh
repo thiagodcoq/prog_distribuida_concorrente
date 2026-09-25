@@ -32,26 +32,32 @@ docker compose ps | tee -a "$LOG_FILE"
 
 # 2. Descrição do Tópico de Sensores
 log "\n${BLUE}[2. DETALHES DO TÓPICO 'dados-sensores' (Líderes, Réplicas e ISRs)]${NC}"
-docker compose exec -T kafka-1 kafka-topics.sh \
+(docker compose exec -T kafka-1 kafka-topics.sh \
     --bootstrap-server kafka-1:9092 \
     --describe --topic dados-sensores 2>/dev/null || \
 docker compose exec -T kafka-2 kafka-topics.sh \
     --bootstrap-server kafka-2:9092 \
-    --describe --topic dados-sensores | tee -a "$LOG_FILE"
+    --describe --topic dados-sensores 2>/dev/null || \
+docker compose exec -T kafka-3 kafka-topics.sh \
+    --bootstrap-server kafka-3:9092 \
+    --describe --topic dados-sensores) | tee -a "$LOG_FILE"
 
 # 3. Estado do Consumer Group
 log "\n${BLUE}[3. DISTRIBUIÇÃO E LAG DO CONSUMER GROUP 'smartfactory-processors']${NC}"
-docker compose exec -T kafka-1 kafka-consumer-groups.sh \
+(docker compose exec -T kafka-1 kafka-consumer-groups.sh \
     --bootstrap-server kafka-1:9092 \
     --describe --group smartfactory-processors 2>/dev/null || \
 docker compose exec -T kafka-2 kafka-consumer-groups.sh \
     --bootstrap-server kafka-2:9092 \
-    --describe --group smartfactory-processors | tee -a "$LOG_FILE"
+    --describe --group smartfactory-processors 2>/dev/null || \
+docker compose exec -T kafka-3 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-3:9092 \
+    --describe --group smartfactory-processors) | tee -a "$LOG_FILE"
 
 # 4. Resumo de Alertas Registrados no Volume Compartilhado
 log "\n${BLUE}[4. RESUMO DO ARQUIVO PERSISTENTE DE ALERTAS (/var/log/smartfactory/alerts.log)]${NC}"
 if docker compose exec -T consumer test -f /var/log/smartfactory/alerts.log 2>/dev/null; then
-    TOTAL_ALERTS=$(docker compose exec -T consumer wc -l < /var/log/smartfactory/alerts.log | tr -d '\r')
+    TOTAL_ALERTS=$(docker compose exec -T consumer wc -l /var/log/smartfactory/alerts.log 2>/dev/null | awk '{print $1}')
     CRITICAL_COUNT=$(docker compose exec -T consumer grep -c '"severity": "CRITICAL"' /var/log/smartfactory/alerts.log 2>/dev/null || echo 0)
     WARN_COUNT=$(docker compose exec -T consumer grep -c '"severity": "WARNING"' /var/log/smartfactory/alerts.log 2>/dev/null || echo 0)
     

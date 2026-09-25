@@ -24,7 +24,7 @@ O mini-mundo modelado neste trabalho contempla quatro setores industriais essenc
 ### 1.2. Objetivos de Concorrência e Tolerância a Falhas
 Os principais objetivos de engenharia de software distribuído avaliados neste projeto incluem:
 - **Particionamento e Paralelismo:** Dividir o fluxo de telemetria em partições lógicas independentes ($P=3$), permitindo processamento simultâneo e ordenado por chave de partição.
-- **Replicação e Tolerância a Falhas de Infraestrutura:** Assegurar que os dados persistidos sobrevivam à queda súbita de qualquer nó broker no cluster através de replicação ativa ($R=2$) e quórum KRaft.
+- **Replicação e Tolerância a Falhas de Infraestrutura:** Assegurar que os dados persistidos sobrevivam à queda súbita de qualquer nó broker no cluster através de replicação ativa ($R=3$, `min.insync.replicas=2`) e quórum KRaft com 3 votantes (maioria 2 de 3).
 - **Concorrência e Rebalanceamento Dinâmico:** Organizar instâncias consumidoras em um *Consumer Group* único (`smartfactory-processors`), garantindo que a carga seja distribuída de forma balanceada e que partições órfãs sejam realocadas sem interrupção de serviço em caso de queda de réplicas.
 - **Elasticidade Horizontal:** Demonstrar a capacidade de escalar para cima e para baixo a quantidade de processadores conforme a carga de trabalho.
 - **Detecção de Anomalias em Tempo Real:** Classificar desvios de operação em níveis `WARNING` e `CRITICAL` e consolidá-los em repositório estruturado compartilhado.
@@ -34,7 +34,7 @@ Os principais objetivos de engenharia de software distribuído avaliados neste p
 ## 2. Arquitetura da Solução
 
 ### 2.1. Topologia de Rede e Fluxo de Mensagens
-A arquitetura foi implementada em containers Docker orquestrados via Docker Compose, utilizando Apache Kafka 3.7 em modo **KRaft (Kafka Raft Metadata Mode)**, eliminando a dependência do Apache ZooKeeper e garantindo menor latência e gestão unificada de metadados.
+A arquitetura foi implementada em containers Docker orquestrados via Docker Compose, utilizando Apache Kafka 3.7 em modo **KRaft (Kafka Raft Metadata Mode)** com 3 brokers, eliminando a dependência do Apache ZooKeeper e garantindo menor latência, quórum de metadados resiliente e alta disponibilidade.
 
 ```
        [ Sensor Pod 1 ]       [ Sensor Pod 2 ]       [ Sensor Pod 3 ]       [ Sensor Pod 4 ]
@@ -44,11 +44,11 @@ A arquitetura foi implementada em containers Docker orquestrados via Docker Comp
                 v                    v                      v                   v
          =============================================================================
                                      APACHE KAFKA CLUSTER
-                   Broker 1 (Porta 9092)              Broker 2 (Porta 9094)
+             Broker 1 (9092)           Broker 2 (9094)           Broker 3 (9096)
          -----------------------------------------------------------------------------
                                       Tópico: dados-sensores
                    [ Partição 0 ]            [ Partição 1 ]           [ Partição 2 ]
-                   (Líder: B1, Rép: B2)      (Líder: B2, Rép: B1)     (Líder: B1, Rép: B2)
+                 (L: B1, Réps: B2,B3)      (L: B2, Réps: B3,B1)     (L: B3, Réps: B1,B2)
          =============================================================================
                                 /                   |                  \
                                /                    |                   \
@@ -67,10 +67,11 @@ A arquitetura foi implementada em containers Docker orquestrados via Docker Comp
 - **Paralelismo Máximo Efetivo:** No Apache Kafka, uma partição só pode ser atribuída a no máximo um consumidor dentro do mesmo *Consumer Group*. Com $P = 3$, o sistema suporta até 3 consumidores ativos em paralelismo total (relação 1:1).
 - **Ordenação Local por Chave:** Os produtores utilizam `key = sensor_id`. O algoritmo de hash (`murmur2`) garante que todas as leituras de um mesmo sensor sejam sistematicamente encaminhadas para a mesma partição, assegurando consistência estrita de ordem cronológica na entrega ao consumidor.
 
-#### Estratégia de Replicação ($R = 2$) e Quórum KRaft
-- **Fator de Replicação ($R = 2$):** Cada mensagem gravada no líder de uma partição é imediatamente replicada para o broker secundário.
-- **`min.insync.replicas = 1`:** Garante que, se um dos brokers falhar, o cluster continue aceitando gravações (`acks = all`) através do broker sobrevivente, priorizando a disponibilidade (*Availability*) conforme o Teorema CAP.
-- **Quórum KRaft Integrado:** Ambos os nós (`kafka-1` e `kafka-2`) atuam com papéis combinados `broker,controller`, participando do quórum de consenso Raft para metadados e eleição de líderes de partição.
+#### Estratégia de Replicação ($R = 3$) e Quórum KRaft com 3 Votantes
+- **Fator de Replicação ($R = 3$):** Cada mensagem gravada no líder de uma partição é replicada para todos os outros dois brokers do cluster, garantindo 3 cópias ativas dos dados em nós fisicamente independentes.
+- **`min.insync.replicas = 2`:** Garante consistência estrita sem perda de disponibilidade. Com $R=3$ e `min.insync.replicas=2`, o cluster tolera a queda de 1 broker sem perder disponibilidade de escrita para produtores configurados com `acks = all`, pois restam ainda 2 réplicas ativas em sincronia (ISR).
+- **Quórum KRaft Integrado (3 Votantes):** Todos os três nós (`kafka-1`, `kafka-2` e `kafka-3`) atuam com papéis combinados `broker,controller`, participando do quórum de consenso Raft para metadados e eleição de líderes (`KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"`).
+- **Eliminação do Antipadrão de 2 Votantes:** Em algoritmos de consenso Raft, quórum significa maioria estrita ($\lfloor N/2 \rfloor + 1$). Com apenas 2 votantes, a maioria é 2 (100%), o que significa que a queda de 1 único broker já derrubava o quórum do controller, impedindo novas eleições de líderes e alterações de metadados. A migração para 3 votantes (maioria = 2 de 3) corrigiu esse antipadrão, alinhando a arquitetura à recomendação oficial do Apache Kafka de operar com número ímpar de controllers ($N \ge 3$) e conferindo tolerância a falhas real tanto ao plano de controle quanto ao plano de dados.
 
 ### 2.3. Especificação do Payload JSON
 O contrato de dados trafegado no tópico `dados-sensores` segue o padrão estruturado abaixo:
@@ -102,9 +103,9 @@ O `Makefile` centraliza todos os comandos operacionais sem intervenções manuai
 | Comando | Descrição Operacional |
 | :--- | :--- |
 | `make build` | Compila as imagens Docker personalizadas do produtor e do consumidor. |
-| `make up` | Inicializa os brokers Kafka, aguarda 10s, cria o tópico particionado e sobe todos os serviços. |
+| `make up` | Inicializa os 3 brokers Kafka, aguarda 10s, cria o tópico particionado e sobe todos os serviços. |
 | `make down` | Encerra os containers mantendo a integridade dos volumes persistentes. |
-| `make create-topic` | Cria explicitamente o tópico `dados-sensores` com $P=3$ e $R=2$ e exibe sua topologia. |
+| `make create-topic` | Cria explicitamente o tópico `dados-sensores` com $P=3$ e $R=3$ e exibe sua topologia. |
 | `make logs` | Conecta-se à saída em tempo real dos consumidores de telemetria. |
 | `make scale-up` | Escala o número de consumidores para 3 réplicas (1 partição por consumidor). |
 | `make scale-down` | Reduz os consumidores para 1 réplica (absorve as 3 partições). |
@@ -166,24 +167,25 @@ smartfactory-processors dados-sensores 2          155             155           
 
 ---
 
-### 4.3. Teste 3: Falha de Broker Kafka (Alta Disponibilidade)
-- **Cenário:** O broker `kafka-1` era o líder da Partição 0. O container foi deliberadamente derrubado (`docker stop smartfactory-kafka-1`).
+### 4.3. Teste 3: Falha de Broker Kafka (Alta Disponibilidade com 3 Brokers)
+- **Cenário:** O cluster operava com 3 brokers ativos. O broker `kafka-1` (líder da Partição 0) foi deliberadamente derrubado (`docker stop smartfactory-kafka-1`).
 - **Comportamento Observado:**
-  1. O cluster KRaft detectou a indisponibilidade física de `kafka-1`.
-  2. O broker remanescente (`kafka-2`), presente na lista de réplicas em sincronia (`ISR`), foi automaticamente promovido a Líder de todas as partições.
-  3. Os clientes (produtores e consumidores) reconectaram seus sockets através da lista de bootstrap (`kafka-1:9092,kafka-2:9092`), atualizando os metadados sem exceções fatais.
-  4. Após a reativação do nó (`docker start smartfactory-kafka-1`), as réplicas foram integralmente sincronizadas (`Isr: 2,1`).
+  1. O quórum KRaft detectou a parada de `kafka-1`. Como o quórum de controllers possui 3 votantes, os nós sobreviventes (`kafka-2` e `kafka-3`) mantiveram maioria estrita ativa (2 de 3), preservando a integridade do quórum de metadados sem interrupção.
+  2. Um dos brokers remanescentes no ISR (`kafka-2`) foi promovido a novo Líder da Partição 0 em milissegundos.
+  3. Com `min.insync.replicas = 2` e 2 réplicas restantes em sincronia (`Isr: 2,3`), os produtores continuaram enviando telemetria com `acks=all` sem falhas.
+  4. Os clientes (produtores e consumidores) reconectaram através da lista de bootstrap (`kafka-1:9092,kafka-2:9092,kafka-3:9092`), atualizando os metadados dinamicamente.
+  5. Após a reinicialização do nó (`docker start smartfactory-kafka-1`), o broker sincronizou os logs pendentes e reintegrou o ISR de todas as partições (`Isr: 2,3,1`).
 
 ```text
-# Estado durante a falha (Liderança migrada para Broker 2):
-Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2  Isr: 2
-Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,1  Isr: 2
-Topic: dados-sensores  Partition: 2  Leader: 2  Replicas: 1,2  Isr: 2
+# Estado durante a falha (Broker 1 parado; quórum de metadados e escritas mantidos por Broker 2 e 3):
+Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2,3  Isr: 2,3
+Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3
+Topic: dados-sensores  Partition: 2  Leader: 3  Replicas: 3,1,2  Isr: 3,2
 
-# Estado após recuperação (ISRs restauradas):
-Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2  Isr: 2,1
-Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,1  Isr: 2,1
-Topic: dados-sensores  Partition: 2  Leader: 2  Replicas: 1,2  Isr: 2,1
+# Estado após recuperação (ISRs restauradas com os 3 brokers sincronizados):
+Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2,3  Isr: 2,3,1
+Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3,1
+Topic: dados-sensores  Partition: 2  Leader: 3  Replicas: 3,1,2  Isr: 3,2,1
 ```
 
 ---
@@ -228,7 +230,7 @@ smartfactory-processors -              -          -               -             
 ### 5.1. O que Funcionou com Pleno Sucesso
 1. **KRaft Mode sem ZooKeeper:** O cluster Kafka 3.7 iniciou rapidamente com footprint reduzido de memória e sem a fragilidade operacional do ZooKeeper.
 2. **RebalanceListener Estruturado:** Os callbacks `on_partitions_revoked` e `on_partitions_assigned` capturaram com clareza o ciclo de vida das partições, fornecendo visibilidade direta nos logs.
-3. **Resiliência Transparente nos Clientes:** A especificação de múltiplos nós na lista `KAFKA_BOOTSTRAP_SERVERS` permitiu que tanto produtores quanto consumidores reconectassem seus sockets ao broker sobrevivente sem falhas irreversíveis.
+3. **Resiliência Transparente nos Clientes:** A especificação dos três nós na lista `KAFKA_BOOTSTRAP_SERVERS` (`kafka-1:9092,kafka-2:9092,kafka-3:9092`) permitiu que tanto produtores quanto consumidores reconectassem seus sockets aos brokers sobreviventes sem falhas irreversíveis.
 4. **Volume Compartilhado de Alertas:** A gravação atômica em `/var/log/smartfactory/alerts.log` manteve o histórico consolidado de anomalias mesmo durante restarts de pods.
 
 ### 5.2. Desafios Enfrentados e Soluções Adotadas
@@ -238,8 +240,8 @@ smartfactory-processors -              -          -               -             
 2. **Janela de Detecção de Queda de Consumidor (`session.timeout.ms`):**
    - *Problema:* Com o valor padrão de 45 segundos, a detecção de queda forçada demorava excessivamente para testes rápidos.
    - *Solução:* Ajustou-se `session_timeout_ms = 10000` (10s) e `heartbeat_interval_ms = 3000` (3s), tornando a percepção de falha ágil sem gerar falso-positivos em rede local.
-3. **Quórum KRaft em Clusters de 2 Nós:**
-   - *Análise Teórica:* Em teoria de consenso Raft, um quórum de $N$ votantes requer $\lfloor N/2 \rfloor + 1$ votos. Para $N=2$, a maioria é 2, o que significa que, caso o nó controlador ativo caia, um novo controlador de metadados não pode ser eleito até que o nó retorne. No entanto, para leitura e escrita de partições já criadas cujas réplicas estão no nó sobrevivente, o particionamento continua operando normalmente. Em ambientes de produção corporativa, recomenda-se número ímpar de votantes ($N \ge 3$).
+3. **Quórum KRaft e Migração de 2 para 3 Votantes:**
+   - *Análise Teórica e Solução Implementada:* Em teoria de consenso distribuído (Raft), um quórum de $N$ votantes requer $\lfloor N/2 \rfloor + 1$ votos para constituir a maioria estrita. Com $N=2$, a maioria exigida é 2, o que implicava que a queda de qualquer um dos nós destruía o quórum de metadados do controller. Para sanar esse antipadrão e garantir tolerância a falhas real, a topologia foi migrada para $N=3$ votantes (`kafka-1`, `kafka-2` e `kafka-3`). Com 3 nós, a maioria necessária é de 2 nós ativos (maioria 2 de 3). Isso assegura tolerância a falhas completa: mesmo com a queda de 1 broker, o cluster mantém tanto o plano de controle (KRaft Controller Quorum operacional para novas eleições e metadados) quanto o plano de dados ($R=3$, `min.insync.replicas=2` garantindo quórum de escrita para `acks=all`), alinhando-se estritamente às boas práticas do Apache Kafka em ambientes de missão crítica.
 
 ---
 

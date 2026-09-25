@@ -33,6 +33,12 @@ echo "--- EXECUÇÃO DO TESTE DE FALHA DE CONSUMIDOR: $(date -u +"%Y-%m-%dT%H:%M
 log "${BLUE}[ETAPA 1] Verificando distribuição inicial de partições no grupo 'smartfactory-processors'...${NC}"
 INITIAL_STATE=$(docker compose exec -T kafka-1 kafka-consumer-groups.sh \
     --bootstrap-server kafka-1:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-2 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-2:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-3 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-3:9092 \
     --describe --group smartfactory-processors)
 
 log "${INITIAL_STATE}"
@@ -50,6 +56,12 @@ sleep 10
 log "\n${BLUE}[ETAPA 3] Consultando nova distribuição de partições após rebalanceamento...${NC}"
 REBALANCED_STATE=$(docker compose exec -T kafka-1 kafka-consumer-groups.sh \
     --bootstrap-server kafka-1:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-2 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-2:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-3 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-3:9092 \
     --describe --group smartfactory-processors)
 
 log "${REBALANCED_STATE}"
@@ -67,6 +79,12 @@ sleep 10
 
 RESTORED_STATE=$(docker compose exec -T kafka-1 kafka-consumer-groups.sh \
     --bootstrap-server kafka-1:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-2 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-2:9092 \
+    --describe --group smartfactory-processors 2>/dev/null || \
+    docker compose exec -T kafka-3 kafka-consumer-groups.sh \
+    --bootstrap-server kafka-3:9092 \
     --describe --group smartfactory-processors)
 
 log "\n${GREEN}[ESTADO FINAL RESTAURADO - 1 PARTIÇÃO POR CONSUMIDOR]:${NC}"

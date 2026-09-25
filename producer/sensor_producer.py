@@ -47,7 +47,7 @@ class SensorTelemetryProducer:
     automáticas com recuo exponencial (exponential backoff).
 
     Attributes:
-        bootstrap_servers (str): Lista de endereços dos brokers Kafka (ex: 'kafka-1:9092,kafka-2:9092').
+        bootstrap_servers (str): Lista de endereços dos brokers Kafka (ex: 'kafka-1:9092,kafka-2:9092,kafka-3:9092').
         topic (str): Nome do tópico Kafka de destino (ex: 'dados-sensores').
         sensor_id (str): Identificador exclusivo do sensor físico (ex: 'sensor-usinagem-01').
         sensor_setor (str): Setor fabril onde o sensor está alocado (ex: 'linha_producao').
@@ -62,7 +62,7 @@ class SensorTelemetryProducer:
         Inicializa o produtor de telemetria carregando as variáveis de ambiente necessárias.
         """
         self.bootstrap_servers: str = os.getenv(
-            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092"
+            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
         self.sensor_id: str = os.getenv("SENSOR_ID", "sensor-generico-01")

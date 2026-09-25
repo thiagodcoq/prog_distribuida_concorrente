@@ -12,7 +12,7 @@ help:
 	@echo "  make build               - Compila as imagens Docker do produtor e consumidor"
 	@echo "  make up                  - Inicia o cluster Kafka e todos os containers"
 	@echo "  make down                - Para os serviços sem remover os volumes de dados"
-	@echo "  make create-topic        - Cria o tópico dados-sensores (3 partições, replicação 2)"
+	@echo "  make create-topic        - Cria o tópico dados-sensores (3 partições, replicação 3)"
 	@echo "  make logs                - Acompanha os logs em tempo real dos consumidores"
 	@echo "  make scale-up            - Escala os consumidores para 3 réplicas"
 	@echo "  make scale-down          - Reduz os consumidores para 1 réplica"
@@ -26,7 +26,7 @@ build:
 	docker compose build
 
 up:
-	docker compose up -d kafka-1 kafka-2
+	docker compose up -d kafka-1 kafka-2 kafka-3
 	@echo "Aguardando estabilização dos brokers..."
 	@sleep 10
 	$(MAKE) create-topic
@@ -41,7 +41,7 @@ create-topic:
 		--create --if-not-exists \
 		--topic dados-sensores \
 		--partitions 3 \
-		--replication-factor 2
+		--replication-factor 3
 	docker compose exec -T kafka-1 kafka-topics.sh \
 		--bootstrap-server kafka-1:9092 \
 		--describe --topic dados-sensores

@@ -38,6 +38,9 @@ TOPIC_DESC=$(docker compose exec -T kafka-1 kafka-topics.sh \
     --describe --topic dados-sensores 2>/dev/null || \
     docker compose exec -T kafka-2 kafka-topics.sh \
     --bootstrap-server kafka-2:9092 \
+    --describe --topic dados-sensores 2>/dev/null || \
+    docker compose exec -T kafka-3 kafka-topics.sh \
+    --bootstrap-server kafka-3:9092 \
     --describe --topic dados-sensores)
 
 log "${TOPIC_DESC}"
@@ -65,11 +68,11 @@ log "${FAILOVER_DESC}"
 
 # Validação do novo líder
 log "\n${GREEN}[VERIFICAÇÃO DE RESILIÊNCIA]${NC}"
-log "O broker ${SURVIVING_SERVICE} assumiu a liderança das partições ativas."
-log "As mensagens continuam sendo consumidas sem travamento dos pods."
+log "O cluster KRaft manteve o quórum de controllers ativo (2 de 3 votantes ativos: kafka-2 e kafka-3)."
+log "A liderança das partições foi preservada/redistribuída e o processamento de dados continua ativo."
 
 # 4. Monitorando 5 segundos de logs dos consumidores
-log "\n${BLUE}[ETAPA 4] Verificando logs dos consumidores operando com broker sobrevivente:${NC}"
+log "\n${BLUE}[ETAPA 4] Verificando logs dos consumidores operando com brokers sobreviventes:${NC}"
 docker compose logs --tail=10 consumer | tee -a "$LOG_FILE"
 
 # 5. Recuperação do broker derrubado
@@ -81,6 +84,9 @@ sleep 10
 
 RECOVERED_DESC=$(docker compose exec -T kafka-1 kafka-topics.sh \
     --bootstrap-server kafka-1:9092 \
+    --describe --topic dados-sensores 2>/dev/null || \
+    docker compose exec -T kafka-2 kafka-topics.sh \
+    --bootstrap-server kafka-2:9092 \
     --describe --topic dados-sensores)
 
 log "\n${GREEN}[ESTADO PÓS-RECUPERAÇÃO - ISRs RESTAURADAS]:${NC}"

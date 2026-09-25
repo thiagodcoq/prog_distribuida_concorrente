@@ -147,7 +147,7 @@ class SmartFactoryConsumer:
         Inicializa o consumidor carregando as variáveis de ambiente e criando os limites.
         """
         self.bootstrap_servers: str = os.getenv(
-            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092"
+            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
         self.group_id: str = os.getenv("KAFKA_GROUP_ID", "smartfactory-processors")
@@ -235,6 +235,14 @@ class SmartFactoryConsumer:
                     retries + 1,
                     max_retries,
                 )
+                def _safe_deserialize(m: bytes) -> Optional[Dict[str, Any]]:
+                    if not m:
+                        return None
+                    try:
+                        return json.loads(m.decode("utf-8"))
+                    except Exception:
+                        return None
+
                 self.consumer = KafkaConsumer(
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     group_id=self.group_id,
@@ -242,7 +250,7 @@ class SmartFactoryConsumer:
                     auto_offset_reset="earliest",
                     enable_auto_commit=True,
                     auto_commit_interval_ms=2000,
-                    value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+                    value_deserializer=_safe_deserialize,
                     session_timeout_ms=10000,
                     heartbeat_interval_ms=3000,
                     max_poll_interval_ms=300000,
@@ -374,7 +382,11 @@ class SmartFactoryConsumer:
                 for topic_partition, messages in records.items():
                     for msg in messages:
                         try:
-                            payload: Dict[str, Any] = msg.value
+                            payload: Optional[Dict[str, Any]] = msg.value
+                            if not isinstance(payload, dict):
+                                # Mensagem não estruturada ou de benchmark - descartada graciosamente
+                                continue
+
                             severity, reasons = self.evaluate_telemetry(payload)
 
                             sensor_id = payload.get("sensor_id", "N/A")
