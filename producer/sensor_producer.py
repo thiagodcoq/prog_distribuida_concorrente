@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Módulo de Produção de Telemetria IoT para SmartFactory.
+Sensor IoT simulado da SmartFactory.
 
-Este módulo implementa a simulação de sensores industriais inteligentes instalados
-em diferentes setores da fábrica (ex: linha de produção, refrigeração, empacotamento, fundição).
-Os sensores geram métricas de temperatura (°C), vibração mecânica (mm/s) e consumo de energia (kW),
-injetando esporadicamente leituras anômalas para validação do sistema de detecção de anomalias.
-As mensagens são serializadas em JSON e despachadas para o cluster Apache Kafka multi-broker.
+Cada instância representa um sensor (definido por SENSOR_ID e SENSOR_SETOR) que, a cada
+poucos segundos, publica no tópico do Kafka uma leitura em JSON com temperatura, vibração
+e consumo de energia. Uma fração das leituras sai propositalmente fora dos limites, para
+exercitar a detecção de anomalias do consumidor.
 
-Disciplina: Distribuição e Concorrência (PUC)
-Data: 2026
+Toda a configuração vem de variáveis de ambiente (ver config/sensor_thresholds.env e o
+docker-compose.yml).
 """
 
 import json
@@ -39,52 +38,41 @@ logger = logging.getLogger("SensorProducer")
 
 class SensorTelemetryProducer:
     """
-    Classe responsável pela geração de telemetria e envio de mensagens para o Apache Kafka.
-
-    Simula o comportamento de um sensor físico em ambiente industrial, realizando a
-    leitura periódica de grandezas físicas e encaminhando dados para o tópico configurado.
-    Possui tolerância a falhas na inicialização, realizando tentativas de reconexão
-    automáticas com recuo exponencial (exponential backoff).
+    Gera leituras de um sensor e as envia ao Kafka.
 
     Attributes:
-        bootstrap_servers (str): Lista de endereços dos brokers Kafka (ex: 'kafka-1:9092,kafka-2:9092,kafka-3:9092').
-        topic (str): Nome do tópico Kafka de destino (ex: 'dados-sensores').
-        sensor_id (str): Identificador exclusivo do sensor físico (ex: 'sensor-usinagem-01').
-        sensor_setor (str): Setor fabril onde o sensor está alocado (ex: 'linha_producao').
-        intervalo_envio (float): Intervalo em segundos entre cada medição transmitida.
-        chance_anomalia (float): Probabilidade percentual (0 a 100) de gerar leitura fora dos limites operacionais.
-        acks (str): Nível de confirmação exigido do broker ('all' espera todas as réplicas em sincronia).
-        producer_retries (int): Reenvios automáticos do cliente Kafka em caso de erro transitório.
-        request_timeout_ms (int): Tempo máximo (ms) para um lote ser confirmado antes de ser descartado.
-            Deve superar o tempo de failover do líder do quórum KRaft.
-        metadata_max_age_ms (int): Idade máxima (ms) dos metadados do cluster antes de renová-los,
-            evitando manter líderes de partição desatualizados após a queda de um broker.
-        connect_max_retries (int): Número máximo de tentativas de conexão inicial ao cluster.
+        bootstrap_servers (str): Brokers do cluster, separados por vírgula.
+        topic (str): Tópico de destino.
+        sensor_id (str): Identificador do sensor. Também é a chave da mensagem, então todas as
+            leituras de um sensor vão para a mesma partição.
+        sensor_setor (str): Setor da fábrica onde o sensor está (ex.: 'refrigeracao').
+        intervalo_envio (float): Segundos entre duas leituras.
+        chance_anomalia (float): Probabilidade (0 a 100) de uma leitura sair anômala.
+        acks (str): Confirmação exigida do Kafka; 'all' espera todas as réplicas em sincronia.
+        producer_retries (int): Reenvios automáticos em caso de erro transitório.
+        request_timeout_ms (int): Tempo (ms) que um lote pode esperar confirmação antes de ser
+            descartado. Precisa ser maior que o tempo de failover do controller do Kafka.
+        metadata_max_age_ms (int): Idade máxima (ms) dos metadados do cluster. Um valor baixo
+            evita insistir em um líder de partição que já caiu.
+        connect_max_retries (int): Tentativas de conexão inicial ao cluster.
         connect_retry_delay (float): Espera inicial (s) entre tentativas; dobra a cada falha.
-        connect_retry_max_delay (float): Limite (s) da espera entre tentativas de conexão.
-        temp_base (float): Temperatura nominal do setor, em °C.
-        vib_base (float): Vibração nominal do setor, em mm/s.
-        kw_base (float): Consumo nominal do setor, em kW.
-        ruido_temp (float): Desvio padrão do ruído gaussiano da temperatura.
-        ruido_vib (float): Desvio padrão do ruído gaussiano da vibração.
-        ruido_kw (float): Desvio padrão do ruído gaussiano do consumo.
-        max_temp (float): Limite crítico de temperatura (°C); as anomalias são geradas acima dele.
-        max_vibration (float): Limite crítico de vibração (mm/s).
-        max_power_kw (float): Limite crítico de consumo (kW).
-        anomalia_fator_min (float): Menor múltiplo do limite crítico usado numa leitura anômala.
-        anomalia_fator_max (float): Maior múltiplo do limite crítico usado numa leitura anômala.
-        running (bool): Flag de controle do ciclo de vida da execução.
-        producer (KafkaProducer): Instância do cliente produtor do Apache Kafka.
+        connect_retry_max_delay (float): Teto (s) da espera entre tentativas.
+        temp_base, vib_base, kw_base (float): Valores nominais do setor (°C, mm/s e kW).
+        ruido_temp, ruido_vib, ruido_kw (float): Desvio padrão do ruído sobre cada valor nominal.
+        max_temp, max_vibration, max_power_kw (float): Limites críticos; as anomalias são geradas
+            acima deles.
+        anomalia_fator_min, anomalia_fator_max (float): Faixa, como múltiplo do limite crítico,
+            dos valores de uma leitura anômala.
+        running (bool): False depois de um SIGINT/SIGTERM, para o laço principal terminar.
+        producer (KafkaProducer): Cliente do Kafka (criado em connect()).
     """
 
     def __init__(self) -> None:
         """
-        Inicializa o produtor de telemetria carregando as variáveis de ambiente necessárias.
+        Lê a configuração das variáveis de ambiente.
 
-        Todos os parâmetros vêm do ambiente (ver config/sensor_thresholds.env e o docker-compose.yml).
-        Quando SENSOR_ID não é informado (caso das réplicas criadas com `--scale`), o identificador
-        é derivado do setor e do hostname do container. As anomalias são geradas acima dos limites
-        críticos configurados (MAX_*), de modo que acompanhem qualquer ajuste feito nesses limites.
+        Sem SENSOR_ID (caso das réplicas criadas com `--scale`), o identificador é montado a
+        partir do setor e do hostname do container.
         """
         self.bootstrap_servers: str = os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
@@ -140,19 +128,17 @@ class SensorTelemetryProducer:
         )
 
     def _setup_signal_handlers(self) -> None:
-        """
-        Registra tratadores de sinais POSIX (SIGINT e SIGTERM) para encerramento gracioso.
-        """
+        """Faz SIGINT e SIGTERM encerrarem o laço principal de forma limpa."""
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum: int, frame: Any) -> None:
         """
-        Tratador de sinal para interrupção segura do processo de envio.
+        Trata o sinal de parada marcando `running` como False.
 
         Args:
-            signum (int): Código numérico do sinal recebido.
-            frame (Any): Quadro de execução no momento da interrupção.
+            signum (int): Número do sinal recebido.
+            frame (Any): Frame de execução no momento do sinal (não usado).
         """
         logger.warning(
             "Sinal de interrupção recebido (%d). Encerrando produtor %s...",
@@ -163,15 +149,14 @@ class SensorTelemetryProducer:
 
     def connect(self) -> None:
         """
-        Estabelece a conexão com o cluster Apache Kafka com política de repetição.
+        Conecta ao cluster Kafka, tentando de novo enquanto ele não responde.
 
-        Caso os brokers ainda estejam em fase de inicialização ou eleição de quórum KRaft,
-        o método aguarda e tenta novamente com recuo exponencial: a espera começa em
-        `connect_retry_delay`, dobra a cada falha e é limitada a `connect_retry_max_delay`,
-        até `connect_max_retries` tentativas (todos configurados por variáveis de ambiente).
+        Serve para quando os brokers ainda estão subindo ou elegendo o líder do quórum. A espera
+        entre tentativas começa em `connect_retry_delay`, dobra a cada falha e fica limitada a
+        `connect_retry_max_delay`.
 
         Raises:
-            SystemExit: Caso todas as tentativas de conexão se esgotem sem sucesso.
+            SystemExit: Se as `connect_max_retries` tentativas se esgotarem.
         """
         max_retries = self.connect_max_retries
         retries = 0
@@ -187,7 +172,7 @@ class SensorTelemetryProducer:
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                     key_serializer=lambda k: k.encode("utf-8") if k else None,
-                    acks=self.acks,  # "all": confirmação de todas as réplicas em sincronia (ISR)
+                    acks=self.acks,
                     retries=self.producer_retries,
                     max_in_flight_requests_per_connection=1,
                     request_timeout_ms=self.request_timeout_ms,
@@ -216,22 +201,16 @@ class SensorTelemetryProducer:
 
     def generate_telemetry_payload(self) -> Dict[str, Any]:
         """
-        Gera uma leitura de telemetria industrial com base no perfil do setor.
+        Gera uma leitura do sensor.
 
-        O perfil nominal (TEMP_BASE, VIB_BASE, KW_BASE) e o ruído vêm de variáveis de
-        ambiente. Possui lógica estocástica para injetar anomalias de temperatura, vibração
-        ou sobretensão elétrica de acordo com o percentual estipulado em `chance_anomalia`;
-        os valores anômalos ficam entre o limite crítico (MAX_*) multiplicado por
-        ANOMALIA_FATOR_MIN e por ANOMALIA_FATOR_MAX, acompanhando os limites configurados.
+        Parte do valor nominal do setor mais um ruído gaussiano. Com probabilidade
+        `chance_anomalia`, sorteia uma grandeza (temperatura, vibração, potência ou as três) e a
+        troca por um valor acima do limite crítico, entre `anomalia_fator_min` e
+        `anomalia_fator_max` vezes esse limite.
 
         Returns:
-            Dict[str, Any]: Dicionário contendo os dados da telemetria:
-                - sensor_id (str): ID do sensor.
-                - setor (str): Nome do setor fabril.
-                - temperatura (float): Temperatura medida em °C.
-                - vibracao (float): Vibração medida em mm/s.
-                - consumo_energia_kw (float): Potência consumida em kW.
-                - timestamp (str): Carimbo de data/hora no padrão ISO 8601 UTC.
+            Dict[str, Any]: A leitura, com as chaves `sensor_id`, `setor`, `temperatura` (°C),
+            `vibracao` (mm/s), `consumo_energia_kw` (kW) e `timestamp` (ISO 8601, UTC).
         """
         is_anomaly = random.uniform(0, 100) < self.chance_anomalia
 
@@ -267,10 +246,10 @@ class SensorTelemetryProducer:
 
     def on_send_success(self, record_metadata: Any) -> None:
         """
-        Callback executado após a confirmação de recebimento da mensagem pelo broker Kafka.
+        Callback de mensagem confirmada pelo Kafka (só registra em nível DEBUG).
 
         Args:
-            record_metadata (RecordMetadata): Metadados retornados pelo broker (tópico, partição, offset).
+            record_metadata (RecordMetadata): Tópico, partição e offset da mensagem gravada.
         """
         logger.debug(
             "Mensagem entregue com sucesso! Tópico: %s | Partição: %d | Offset: %d",
@@ -281,22 +260,19 @@ class SensorTelemetryProducer:
 
     def on_send_error(self, exc: Exception) -> None:
         """
-        Callback executado em caso de erro na transmissão assíncrona da mensagem.
+        Callback de falha no envio de uma mensagem (só registra o erro; não reenvia).
 
         Args:
-            exc (Exception): Exceção reportada durante a tentativa de envio.
+            exc (Exception): Motivo da falha.
         """
         logger.error("Erro assíncrono ao enviar mensagem para o Kafka: %s", str(exc))
 
     def run(self) -> None:
         """
-        Inicia o loop contínuo de publicação de telemetria dos sensores.
+        Conecta e publica uma leitura a cada `intervalo_envio` segundos até receber um sinal de parada.
 
-        Executa periodicamente a geração de métricas e o envio ao Kafka até que um
-        sinal de terminação seja interceptado. Cada mensagem usa o `sensor_id` como chave,
-        o que garante que todas as leituras de um mesmo sensor sigam para a mesma partição
-        (ordem preservada por sensor). O envio é assíncrono: o resultado chega pelos
-        callbacks `on_send_success` e `on_send_error`.
+        O envio é assíncrono: o resultado de cada mensagem chega aos callbacks
+        `on_send_success` e `on_send_error`.
         """
         self._setup_signal_handlers()
         self.connect()
@@ -338,9 +314,7 @@ class SensorTelemetryProducer:
             self.close()
 
     def close(self) -> None:
-        """
-        Libera os recursos e fecha a conexão do produtor Kafka com esvaziamento de buffers.
-        """
+        """Envia o que ainda está no buffer e fecha a conexão com o Kafka."""
         if self.producer:
             logger.info("Esvaziando buffers e desconectando do cluster Kafka...")
             try:
@@ -352,9 +326,7 @@ class SensorTelemetryProducer:
 
 
 def main() -> None:
-    """
-    Ponto de entrada principal para execução do script produtor.
-    """
+    """Cria o sensor a partir do ambiente e o executa."""
     producer = SensorTelemetryProducer()
     producer.run()
 

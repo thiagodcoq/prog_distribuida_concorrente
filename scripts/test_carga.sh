@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T4: Comportamento do sistema sob carga (Objetivo 5 do enunciado)
 #
 # Injeta um surto de mensagens JSON válidas no tópico principal com o
@@ -7,7 +6,6 @@
 # group até ser absorvido. Registra vazão, latência e a curva de lag.
 # Uso: ./scripts/test_carga.sh [registros]   (padrão 100000)
 # Pré-requisito: make up
-# ==============================================================================
 RECORDS="${1:-100000}"
 SCRIPT_ARGS="registros=$RECORDS"
 source "$(dirname "$0")/lib.sh"

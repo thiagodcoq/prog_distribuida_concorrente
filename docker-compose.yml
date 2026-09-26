@@ -10,10 +10,8 @@ volumes:
   kafka3-data:
   alerts-data:
 
-# ==============================================================================
 # Blocos reutilizáveis (âncoras YAML): evitam repetir a configuração dos 3 brokers
 # e dos 4+ produtores. Parâmetros de aplicação vêm de config/sensor_thresholds.env.
-# ==============================================================================
 
 # Configuração comum a todos os brokers (topologia: P=3, R=3, min.insync.replicas=2,
 # coerente com TOPIC_* em config/sensor_thresholds.env)
@@ -63,9 +61,7 @@ x-producer: &producer
   restart: unless-stopped
 
 services:
-  # ============================================================================
   # Cluster Kafka em modo KRaft: 3 nós broker+controller (quórum de 2 em 3)
-  # ============================================================================
   kafka-1:
     <<: *kafka
     container_name: smartfactory-kafka-1
@@ -105,10 +101,8 @@ services:
     volumes:
       - kafka3-data:/var/lib/kafka/data
 
-  # ============================================================================
   # Construção da imagem do produtor (uma única vez, compartilhada pelos sensores).
   # Só participa de `make build` (profile "build"); nunca é iniciado.
-  # ============================================================================
   producer-image:
     profiles: ["build"]
     build:
@@ -116,11 +110,9 @@ services:
       dockerfile: Dockerfile
     image: smartfactory-producer:latest
 
-  # ============================================================================
   # Sensores (produtores): mesma imagem, perfil do setor por variáveis de ambiente.
   # SENSOR_ID é a chave de partição do Kafka: escolhida para que os sensores se
   # distribuam por P0, P1 e P2 (verificado por `make test-balance`).
-  # ============================================================================
   producer-linha-producao:
     <<: *producer
     container_name: smartfactory-producer-1
@@ -164,11 +156,9 @@ services:
       VIB_BASE: "3.2"
       KW_BASE: "22.0"
 
-  # ============================================================================
   # Sensores adicionais para demonstrar escala de produtores:
   #   make scale-sensors N=8
   # SENSOR_ID é derivado do hostname de cada réplica.
-  # ============================================================================
   sensor-extra:
     <<: *producer
     profiles: ["scale"]
@@ -178,10 +168,8 @@ services:
       VIB_BASE: "2.5"
       KW_BASE: "15.0"
 
-  # ============================================================================
   # Consumidores: processadores de telemetria e detecção de anomalias.
   # Iniciam com 3 réplicas (uma por partição); escalar com `docker compose up --scale`.
-  # ============================================================================
   consumer:
     build:
       context: ./consumer

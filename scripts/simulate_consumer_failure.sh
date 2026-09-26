@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T2: Falha de consumidor e rebalanceamento (Objetivo 4 do enunciado)
 #
 # Uso: ./scripts/simulate_consumer_failure.sh [graceful|hard]
@@ -11,7 +10,6 @@
 # Derruba o consumidor dono de uma partição COM tráfego (TARGET_PARTITION, padrão 1),
 # mede o tempo até outro consumidor assumir e verifica que o processamento continua.
 # Pré-requisito: make up (3 consumidores)
-# ==============================================================================
 MODE="${1:-graceful}"
 TARGET_PARTITION="${TARGET_PARTITION:-1}"
 SCRIPT_ARGS="modo=$MODE partição-alvo=$TARGET_PARTITION"

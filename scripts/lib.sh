@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # lib.sh: funções comuns dos scripts de teste da SmartFactory.
 #
 # Uso (no início de cada script):   source "$(dirname "$0")/lib.sh"
@@ -9,7 +8,6 @@
 #   cluster Kafka. Os scripts terminam com `finish`, que devolve exit code != 0
 #   quando alguma asserção falhou.
 # - Compatível com o bash 3.2 do macOS (sem arrays associativos nem mapfile).
-# ==============================================================================
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || exit 1
@@ -26,9 +24,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 LOG_FILE="/dev/null"
 
-# ------------------------------------------------------------------------------
-# Logging e asserções
-# ------------------------------------------------------------------------------
+# --- Logging e asserções ---
 
 # init_log <arquivo> <título>: cria o log do teste com cabeçalho de rastreabilidade.
 init_log() {
@@ -98,9 +94,7 @@ wait_until() {
     return 0
 }
 
-# ------------------------------------------------------------------------------
-# Acesso ao cluster Kafka (executa as ferramentas dentro de um broker vivo)
-# ------------------------------------------------------------------------------
+# --- Acesso ao cluster Kafka (executa as ferramentas dentro de um broker vivo) ---
 
 broker_running() { [ "$(docker inspect -f '{{.State.Running}}' "smartfactory-$1" 2>/dev/null)" = "true" ]; }
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T9: Captura de tráfego de rede durante a falha de um broker (Wireshark / tcpdump)
 #
 # Um container auxiliar (nicolaka/netshoot) compartilha a pilha de rede do produtor
@@ -14,7 +13,6 @@
 #
 # Uso: ./scripts/capture_failover_pcap.sh
 # Pré-requisito: make up (e acesso ao Docker Hub na primeira execução, para a imagem netshoot)
-# ==============================================================================
 SCRIPT_ARGS="$*"
 source "$(dirname "$0")/lib.sh"
 ensure_stack_up
