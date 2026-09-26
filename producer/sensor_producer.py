@@ -28,7 +28,6 @@ from kafka import KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 
 
-# Configuração estruturada de logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -54,6 +53,26 @@ class SensorTelemetryProducer:
         sensor_setor (str): Setor fabril onde o sensor está alocado (ex: 'linha_producao').
         intervalo_envio (float): Intervalo em segundos entre cada medição transmitida.
         chance_anomalia (float): Probabilidade percentual (0 a 100) de gerar leitura fora dos limites operacionais.
+        acks (str): Nível de confirmação exigido do broker ('all' espera todas as réplicas em sincronia).
+        producer_retries (int): Reenvios automáticos do cliente Kafka em caso de erro transitório.
+        request_timeout_ms (int): Tempo máximo (ms) para um lote ser confirmado antes de ser descartado.
+            Deve superar o tempo de failover do líder do quórum KRaft.
+        metadata_max_age_ms (int): Idade máxima (ms) dos metadados do cluster antes de renová-los,
+            evitando manter líderes de partição desatualizados após a queda de um broker.
+        connect_max_retries (int): Número máximo de tentativas de conexão inicial ao cluster.
+        connect_retry_delay (float): Espera inicial (s) entre tentativas; dobra a cada falha.
+        connect_retry_max_delay (float): Limite (s) da espera entre tentativas de conexão.
+        temp_base (float): Temperatura nominal do setor, em °C.
+        vib_base (float): Vibração nominal do setor, em mm/s.
+        kw_base (float): Consumo nominal do setor, em kW.
+        ruido_temp (float): Desvio padrão do ruído gaussiano da temperatura.
+        ruido_vib (float): Desvio padrão do ruído gaussiano da vibração.
+        ruido_kw (float): Desvio padrão do ruído gaussiano do consumo.
+        max_temp (float): Limite crítico de temperatura (°C); as anomalias são geradas acima dele.
+        max_vibration (float): Limite crítico de vibração (mm/s).
+        max_power_kw (float): Limite crítico de consumo (kW).
+        anomalia_fator_min (float): Menor múltiplo do limite crítico usado numa leitura anômala.
+        anomalia_fator_max (float): Maior múltiplo do limite crítico usado numa leitura anômala.
         running (bool): Flag de controle do ciclo de vida da execução.
         producer (KafkaProducer): Instância do cliente produtor do Apache Kafka.
     """
@@ -61,13 +80,17 @@ class SensorTelemetryProducer:
     def __init__(self) -> None:
         """
         Inicializa o produtor de telemetria carregando as variáveis de ambiente necessárias.
+
+        Todos os parâmetros vêm do ambiente (ver config/sensor_thresholds.env e o docker-compose.yml).
+        Quando SENSOR_ID não é informado (caso das réplicas criadas com `--scale`), o identificador
+        é derivado do setor e do hostname do container. As anomalias são geradas acima dos limites
+        críticos configurados (MAX_*), de modo que acompanhem qualquer ajuste feito nesses limites.
         """
         self.bootstrap_servers: str = os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
         self.sensor_setor: str = os.getenv("SENSOR_SETOR", "linha_producao")
-        # Sem SENSOR_ID explícito (ex.: réplicas de --scale), o ID é derivado do hostname
         self.sensor_id: str = os.getenv(
             "SENSOR_ID", f"sensor-{self.sensor_setor}-{socket.gethostname()}"
         )
@@ -76,7 +99,6 @@ class SensorTelemetryProducer:
             os.getenv("CHANCE_ANOMALIA_PERCENTUAL", "15.0")
         )
 
-        # Cliente Kafka
         self.acks: str = os.getenv("PRODUCER_ACKS", "all")
         self.producer_retries: int = int(os.getenv("PRODUCER_RETRIES", "5"))
         self.request_timeout_ms: int = int(
@@ -93,7 +115,6 @@ class SensorTelemetryProducer:
             os.getenv("CONNECT_RETRY_MAX_DELAY_SEG", "30.0")
         )
 
-        # Perfil de operação nominal do setor e ruído gaussiano
         self.temp_base: float = float(os.getenv("TEMP_BASE", "50.0"))
         self.vib_base: float = float(os.getenv("VIB_BASE", "2.0"))
         self.kw_base: float = float(os.getenv("KW_BASE", "15.0"))
@@ -101,7 +122,6 @@ class SensorTelemetryProducer:
         self.ruido_vib: float = float(os.getenv("RUIDO_VIBRACAO", "0.4"))
         self.ruido_kw: float = float(os.getenv("RUIDO_POTENCIA_KW", "1.5"))
 
-        # Anomalias são geradas acima dos limites críticos configurados
         self.max_temp: float = float(os.getenv("MAX_TEMP", "85.0"))
         self.max_vibration: float = float(os.getenv("MAX_VIBRATION", "5.0"))
         self.max_power_kw: float = float(os.getenv("MAX_POWER_KW", "30.0"))
@@ -215,13 +235,11 @@ class SensorTelemetryProducer:
         """
         is_anomaly = random.uniform(0, 100) < self.chance_anomalia
 
-        # Operação nominal com ruído gaussiano suave
         temp = self.temp_base + random.gauss(0, self.ruido_temp)
         vibracao = max(0.1, self.vib_base + random.gauss(0, self.ruido_vib))
         consumo_kw = max(1.0, self.kw_base + random.gauss(0, self.ruido_kw))
 
         if is_anomaly:
-            # Sobrescreve as grandezas afetadas com valores acima do limite crítico
             anomaly_type = random.choice(["temp", "vib", "power", "multi"])
             if anomaly_type in ("temp", "multi"):
                 temp = self.max_temp * random.uniform(
@@ -275,7 +293,10 @@ class SensorTelemetryProducer:
         Inicia o loop contínuo de publicação de telemetria dos sensores.
 
         Executa periodicamente a geração de métricas e o envio ao Kafka até que um
-        sinal de terminação seja interceptado.
+        sinal de terminação seja interceptado. Cada mensagem usa o `sensor_id` como chave,
+        o que garante que todas as leituras de um mesmo sensor sigam para a mesma partição
+        (ordem preservada por sensor). O envio é assíncrono: o resultado chega pelos
+        callbacks `on_send_success` e `on_send_error`.
         """
         self._setup_signal_handlers()
         self.connect()
@@ -290,7 +311,6 @@ class SensorTelemetryProducer:
         try:
             while self.running:
                 payload = self.generate_telemetry_payload()
-                # A chave garante o particionamento consistente baseado no ID do sensor
                 future = self.producer.send(
                     self.topic,
                     key=self.sensor_id,
