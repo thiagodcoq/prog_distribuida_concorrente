@@ -1,91 +1,156 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script de Simulação: Falha de Broker Kafka (Alta Disponibilidade e Failover)
-# Teste 3 do Roteiro de Avaliação de Distribuição e Concorrência
+# T3: Falha de broker Kafka e failover (Objetivo 4 do enunciado)
+#
+# Uso: ./scripts/simulate_broker_failure.sh [graceful|hard] [controller|follower]
+#   graceful : docker stop (desligamento controlado do broker)
+#   hard     : docker kill (queda abrupta, sem desligamento controlado)
+#   controller: derruba o líder do quórum KRaft (padrão); follower: derruba outro broker.
+#
+# Verifica com asserções: novo líder do quórum, líderes de partição realocados, ISR
+# reduzido a 2, sensores e consumidores seguindo em frente e, com carga contínua
+# (kafka-producer-perf-test, acks=all + idempotência) num tópico exclusivo, que
+# NENHUMA mensagem foi perdida nem duplicada durante a queda. Depois religa o broker
+# e confere a ressincronização do ISR.
+# Pré-requisito: make up
 # ==============================================================================
+MODE="${1:-graceful}"
+TARGET_KIND="${2:-controller}"
+LOSS_TOPIC="${LOSS_TOPIC:-teste-perda}"
+LOSS_RECORDS="${LOSS_RECORDS:-1500}"
+LOSS_RATE="${LOSS_RATE:-50}"
+SCRIPT_ARGS="modo=$MODE alvo=$TARGET_KIND"
+source "$(dirname "$0")/lib.sh"
+ensure_stack_up
 
-set -e
+init_log "T3_falha_broker_${MODE}_${TARGET_KIND}.log" "T3: FALHA DE BROKER KAFKA (modo: $MODE, alvo: $TARGET_KIND)"
+PERF_OUT="$LOG_DIR/T3_perf_${MODE}_${TARGET_KIND}.out"
 
-# Cores para formatação de saída
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+VICTIM=""
+restore() { [ -n "$VICTIM" ] && ! broker_running "$VICTIM" && start_container "smartfactory-$VICTIM"; }
+trap restore EXIT
 
-LOG_DIR="reports/logs"
-LOG_FILE="${LOG_DIR}/failover_broker.log"
-mkdir -p "${LOG_DIR}"
-
-echo -e "${CYAN}================================================================================"
-echo -e "       TESTE 3: RESILIÊNCIA E FAILOVER DE BROKER KAFKA MULTI-BROKER"
-echo -e "================================================================================${NC}"
-
-# Função para registrar saída no console e no arquivo de log
-log() {
-    local msg="$1"
-    echo -e "$msg" | tee -a "$LOG_FILE"
+all_isr_equal() { # all_isr_equal <n>
+    local n="$1"
+    [ "$(partition_table | wc -l | tr -d ' ')" -eq "$TOPIC_PARTITIONS" ] &&
+        [ "$(partition_table | awk -v n="$n" '$3 != n' | wc -l | tr -d ' ')" -eq 0 ]
 }
 
-# Inicializa o log com timestamp
-echo "--- EXECUÇÃO DO TESTE DE FALHA DE BROKER: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ---" > "$LOG_FILE"
+step "Pré-condições"
+check "3 brokers em execução" [ "$(for n in 1 2 3; do broker_running kafka-$n && echo x; done | wc -l | tr -d ' ')" -eq 3 ]
+check "ISR completo em todas as partições" all_isr_equal "$TOPIC_REPLICATION_FACTOR"
+describe_topic | block
+quorum_status | block
+LEADER0=$(quorum_field LeaderId)
+EPOCH0=$(quorum_field LeaderEpoch)
+log "    Líder do quórum KRaft antes da falha: broker $LEADER0 (epoch $EPOCH0)"
 
-# 1. Inspeção do estado atual do tópico
-log "${BLUE}[ETAPA 1] Identificando a liderança atual das partições no tópico 'dados-sensores'...${NC}"
-TOPIC_DESC=$(docker compose exec -T kafka-1 kafka-topics.sh \
-    --bootstrap-server kafka-1:9092 \
-    --describe --topic dados-sensores 2>/dev/null || \
-    docker compose exec -T kafka-2 kafka-topics.sh \
-    --bootstrap-server kafka-2:9092 \
-    --describe --topic dados-sensores)
+if [ "$TARGET_KIND" = "controller" ]; then
+    VICTIM_ID="$LEADER0"
+else
+    VICTIM_ID=$(for n in 1 2 3; do [ "$n" != "$LEADER0" ] && echo "$n"; done | head -1)
+fi
+VICTIM="kafka-$VICTIM_ID"
+RUNNER=$(live_broker "$VICTIM")
+log "    Broker a derrubar: $VICTIM | perf-test executa em: $RUNNER"
 
-log "${TOPIC_DESC}"
+step "Preparando tópico de verificação de perda ($LOSS_TOPIC, P=$TOPIC_PARTITIONS, R=$TOPIC_REPLICATION_FACTOR)"
+kafka_tool kafka-topics.sh --create --if-not-exists --topic "$LOSS_TOPIC" \
+    --partitions "$TOPIC_PARTITIONS" --replication-factor "$TOPIC_REPLICATION_FACTOR" | block
+LOSS_BEFORE=$(total_end_offsets "$LOSS_TOPIC")
+MAIN_BEFORE=$(total_end_offsets)
+log "    end offsets de $LOSS_TOPIC antes: $LOSS_BEFORE"
 
-# 2. Identificar qual broker derrubar (padrão kafka-1)
-TARGET_CONTAINER="smartfactory-kafka-1"
-TARGET_SERVICE="kafka-1"
-SURVIVING_SERVICE="kafka-2"
-SURVIVING_PORT="kafka-2:9092"
+step "Iniciando carga contínua: $LOSS_RECORDS msgs a $LOSS_RATE msg/s (acks=all, idempotente)"
+run_perf_test "$RUNNER" "$LOSS_TOPIC" "$LOSS_RECORDS" "$LOSS_RATE" \
+    enable.idempotence=true delivery.timeout.ms=120000 request.timeout.ms=30000 >"$PERF_OUT" 2>&1 &
+PERF_PID=$!
+sleep 8
+MAIN_AT_KILL=$(total_end_offsets)
 
-log "\n${YELLOW}[ETAPA 2] Derrubando deliberadamente o broker principal: ${TARGET_CONTAINER}...${NC}"
-log "Comando: docker stop ${TARGET_CONTAINER}"
-docker stop "${TARGET_CONTAINER}" | tee -a "$LOG_FILE"
+step "Derrubando $VICTIM (modo $MODE)"
+T0=$(now)
+KILL_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+stop_or_kill "smartfactory-$VICTIM" "$MODE"
+log "    $(date -u +%H:%M:%S) $VICTIM fora do ar"
 
-log "\n${YELLOW}Aguardando 6 segundos para detecção de falha e eleição de novo líder...${NC}"
-sleep 6
+step "Failover das lideranças de partição"
+leaders_moved() {
+    [ "$(partition_table | wc -l | tr -d ' ')" -eq "$TOPIC_PARTITIONS" ] &&
+        [ "$(partition_table | awk -v v="$VICTIM_ID" '$2 == v || $2 == -1' | wc -l | tr -d ' ')" -eq 0 ]
+}
+if wait_until 90 leaders_moved; then
+    pass "Nenhuma partição lidera no broker caído; novos líderes eleitos em ${ELAPSED}s"
+else
+    fail "Lideranças não foram realocadas em 90 s"
+fi
+isr_shrunk() { all_isr_equal $((TOPIC_REPLICATION_FACTOR - 1)); }
+if wait_until 60 isr_shrunk; then
+    pass "ISR reduzido a $((TOPIC_REPLICATION_FACTOR - 1)) réplicas em todas as partições (>= min.insync.replicas=$TOPIC_MIN_INSYNC_REPLICAS)"
+else
+    fail "ISR não convergiu para $((TOPIC_REPLICATION_FACTOR - 1)) réplicas"
+fi
+describe_topic | block
 
-# 3. Verificação do failover no broker sobrevivente
-log "\n${BLUE}[ETAPA 3] Consultando o broker sobrevivente (${SURVIVING_SERVICE}) sobre a nova topologia...${NC}"
-FAILOVER_DESC=$(docker compose exec -T "${SURVIVING_SERVICE}" kafka-topics.sh \
-    --bootstrap-server "${SURVIVING_PORT}" \
-    --describe --topic dados-sensores)
+step "Quórum KRaft com o broker fora"
+new_leader_ok() {
+    local l
+    l=$(quorum_field LeaderId)
+    [ -n "$l" ] && [ "$l" != "-1" ] && [ "$l" != "$VICTIM_ID" ]
+}
+if wait_until 60 new_leader_ok; then
+    LEADER1=$(quorum_field LeaderId)
+    EPOCH1=$(quorum_field LeaderEpoch)
+    pass "Quórum mantém líder após a queda: broker $LEADER1 (epoch $EPOCH1) com 2 de 3 votantes"
+    if [ "$TARGET_KIND" = "controller" ]; then
+        election_happened() { [ "$LEADER1" != "$LEADER0" ] && [ "$EPOCH1" -gt "$EPOCH0" ]; }
+        check "Nova eleição: líder mudou ($LEADER0 -> $LEADER1) e epoch aumentou ($EPOCH0 -> $EPOCH1)" election_happened
+    fi
+else
+    fail "Quórum sem líder válido após a queda"
+fi
+quorum_status | block
 
-log "${FAILOVER_DESC}"
+step "Sensores e consumidores continuam funcionando durante a falha"
+sensors_flow() { [ "$(total_end_offsets)" -gt "$((MAIN_AT_KILL + 4))" ]; }
+if wait_until 60 sensors_flow; then
+    pass "Produtores seguem gravando em $KAFKA_TOPIC durante a falha (offsets totais: $MAIN_AT_KILL -> $(total_end_offsets))"
+else
+    fail "Produtores pararam de gravar em $KAFKA_TOPIC"
+fi
+check "4 produtores continuam em execução (nenhum caiu)" \
+    [ "$(docker ps --filter 'name=smartfactory-producer-' --filter status=running -q | wc -l | tr -d ' ')" -eq 4 ]
+consumers_ok() { [ "$(group_member_count)" -eq 3 ] && [ "$(total_lag)" -le 30 ]; }
+check "3 consumidores no grupo e lag <= 30" wait_until 90 consumers_ok
+describe_group | block
 
-# Validação do novo líder
-log "\n${GREEN}[VERIFICAÇÃO DE RESILIÊNCIA]${NC}"
-log "O broker ${SURVIVING_SERVICE} assumiu a liderança das partições ativas."
-log "As mensagens continuam sendo consumidas sem travamento dos pods."
+step "Aguardando o fim da carga contínua (perf-test)"
+wait "$PERF_PID"
+PERF_RC=$?
+tail -3 "$PERF_OUT" | block
+check "perf-test terminou com sucesso (exit $PERF_RC): todas as mensagens confirmadas com acks=all" [ "$PERF_RC" -eq 0 ]
+LOSS_AFTER=$(total_end_offsets "$LOSS_TOPIC")
+DELTA=$((LOSS_AFTER - LOSS_BEFORE))
+log "    end offsets de $LOSS_TOPIC depois: $LOSS_AFTER (delta = $DELTA; enviadas = $LOSS_RECORDS)"
+check "Zero perda e zero duplicação: delta de offsets ($DELTA) == mensagens enviadas ($LOSS_RECORDS)" [ "$DELTA" -eq "$LOSS_RECORDS" ]
 
-# 4. Monitorando 5 segundos de logs dos consumidores
-log "\n${BLUE}[ETAPA 4] Verificando logs dos consumidores operando com broker sobrevivente:${NC}"
-docker compose logs --tail=10 consumer | tee -a "$LOG_FILE"
+step "Integridade da telemetria dos sensores durante a falha"
+dropped=$(docker compose logs --since "$KILL_ISO" producer-linha-producao producer-refrigeracao \
+    producer-empacotamento producer-fundicao 2>/dev/null | grep -c "Erro assíncrono")
+log "    Lotes descartados pelos produtores dos sensores desde $KILL_ISO: $dropped"
+check "Nenhuma leitura de sensor descartada (0 erros assíncronos de envio)" [ "$dropped" -eq 0 ]
 
-# 5. Recuperação do broker derrubado
-log "\n${BLUE}[ETAPA 5] Reiniciando o broker ${TARGET_CONTAINER} para recuperação de ISR (In-Sync Replicas)...${NC}"
-docker start "${TARGET_CONTAINER}" | tee -a "$LOG_FILE"
+step "Recuperando $VICTIM"
+start_container "smartfactory-$VICTIM"
+isr_full() { all_isr_equal "$TOPIC_REPLICATION_FACTOR"; }
+if wait_until 120 isr_full; then
+    pass "ISR completo novamente (${TOPIC_REPLICATION_FACTOR} réplicas) em ${ELAPSED}s após religar $VICTIM"
+else
+    fail "ISR não voltou ao normal em 120 s"
+fi
+describe_topic | block
+victim_healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "smartfactory-$VICTIM")" = "healthy" ]; }
+check "$VICTIM saudável novamente (healthcheck)" wait_until 60 victim_healthy
+quorum_status | block
 
-log "Aguardando 10 segundos para reconexão e sincronização das réplicas..."
-sleep 10
-
-RECOVERED_DESC=$(docker compose exec -T kafka-1 kafka-topics.sh \
-    --bootstrap-server kafka-1:9092 \
-    --describe --topic dados-sensores)
-
-log "\n${GREEN}[ESTADO PÓS-RECUPERAÇÃO - ISRs RESTAURADAS]:${NC}"
-log "${RECOVERED_DESC}"
-
-log "\n${GREEN}================================================================================"
-log " TESTE 3 CONCLUÍDO COM SUCESSO! Evidências salvas em: ${LOG_FILE}"
-log "================================================================================${NC}"
+finish

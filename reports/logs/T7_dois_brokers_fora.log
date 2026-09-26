@@ -1,0 +1,49 @@
+================================================================================
+ T7: LIMITE DE TOLERÂNCIA: 2 DE 3 BROKERS FORA
+================================================================================
+Data/hora (UTC) : 2026-09-26T01:02:31Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : indisponibilidade=50s
+================================================================================
+
+>>> [01:02:31] Pré-condições
+    [PASS] ISR completo antes da falha
+
+>>> [01:02:33] Derrubando kafka-2 e kafka-3 (SIGKILL); sobrevivente: kafka-1
+    01:02:34 2 de 3 brokers fora do ar
+
+>>> [01:02:49] Tentativa de escrita com acks=all e min.insync.replicas=2 (esperado: FALHAR)
+    org.apache.kafka.common.errors.TimeoutException: Expiring 20 record(s) for dados-sensores-1:15001 ms has passed since batch creation
+    org.apache.kafka.common.errors.TimeoutException: Expiring 20 record(s) for dados-sensores-1:15001 ms has passed since batch creation
+    0 records sent, 0.000000 records/sec (0.00 MB/sec), NaN ms avg latency, 0.00 ms max latency, 0 ms 50th, 0 ms 95th, 0 ms 99th, 0 ms 99.9th.
+    [PASS] Escrita com acks=all é REJEITADA sem quórum/ISR suficiente (registros confirmados: 0 de 20)
+
+>>> [01:03:06] Mantendo a indisponibilidade por 50s
+    [PASS] Produtores dos sensores continuam em execução (não crasham)
+    [PASS] Consumidores continuam em execução
+    LIMITAÇÃO OBSERVADA: lotes de telemetria descartados pelos sensores durante a indisponibilidade total: 64
+    (os produtores Python só guardam em buffer por request.timeout.ms = 45000 ms)
+
+>>> [01:03:57] Religando kafka-2 e kafka-3
+    [PASS] 3 brokers saudáveis novamente
+    [PASS] ISR completo restabelecido em 2s
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2,3
+    	Topic: dados-sensores	Partition: 1	Leader: 1	Replicas: 2,3,1	Isr: 1,3,2
+    	Topic: dados-sensores	Partition: 2	Leader: 1	Replicas: 3,1,2	Isr: 1,3,2
+
+>>> [01:04:28] Sistema retoma sozinho
+    [PASS] Escrita com acks=all volta a funcionar (registros confirmados: 20 de 20)
+    [PASS] Sensores voltam a gravar no tópico
+    [PASS] 3 consumidores no grupo e lag <= 30
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  2          38638           38638           0               consumer-debd217071db-8cd5b2e7-2460-4f27-928b-defaf4476978 /172.19.0.11    consumer-debd217071db
+    smartfactory-processors dados-sensores  0          38175           38175           0               consumer-119e6ed3a6a2-92bfa627-5d65-4480-aa65-884db0c3e87a /172.19.0.10    consumer-119e6ed3a6a2
+    smartfactory-processors dados-sensores  1          39797           39797           0               consumer-bf999ba3130e-dc562736-b306-4cb3-b629-02ec82d1925d /172.19.0.6     consumer-bf999ba3130e
+
+================================================================================
+ RESULTADO: PASS (9/9 verificações)  |  evidência: reports/logs/T7_dois_brokers_fora.log
+================================================================================

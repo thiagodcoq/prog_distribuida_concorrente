@@ -28,7 +28,6 @@ from kafka import ConsumerRebalanceListener, KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError, NoBrokersAvailable
 
 
-# Configuração estruturada de logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -138,6 +137,21 @@ class SmartFactoryConsumer:
         warn_power_kw (float): Limite de alerta para consumo energético (kW).
         max_power_kw (float): Limite crítico para consumo energético (kW).
         alert_log_path (str): Caminho absoluto do arquivo compartilhado de alertas.
+        auto_offset_reset (str): Onde começar a ler quando o grupo não tem offset salvo.
+        auto_commit_interval_ms (int): Intervalo (ms) do commit automático dos offsets consumidos.
+        session_timeout_ms (int): Tempo sem heartbeat (ms) após o qual o consumidor é dado como
+            falho e o grupo é rebalanceado.
+        heartbeat_interval_ms (int): Intervalo (ms) entre heartbeats enviados ao coordenador.
+        max_poll_interval_ms (int): Tempo máximo (ms) entre duas chamadas de poll.
+        metadata_max_age_ms (int): Idade máxima (ms) dos metadados antes de renová-los; evita buscar
+            em um broker que já caiu depois de um failover.
+        poll_timeout_ms (int): Tempo de espera (ms) de cada poll, curto para reagir a sinais de parada.
+        poll_max_records (int): Máximo de registros devolvidos por poll.
+        processing_delay_seg (float): Custo simulado de processamento por mensagem, em segundos
+            (0 desliga; usado no teste de elasticidade).
+        connect_max_retries (int): Número máximo de tentativas de conexão ao cluster.
+        connect_retry_delay (float): Espera inicial (s) entre tentativas; dobra a cada falha.
+        connect_retry_max_delay (float): Limite (s) da espera entre tentativas de conexão.
         running (bool): Flag de controle do ciclo de execução.
         consumer (KafkaConsumer): Instância do consumidor Kafka.
     """
@@ -145,18 +159,21 @@ class SmartFactoryConsumer:
     def __init__(self) -> None:
         """
         Inicializa o consumidor carregando as variáveis de ambiente e criando os limites.
+
+        O identificador do consumidor é CONSUMER_ID ou, na falta dele, `consumer-<hostname>`
+        (o hostname de um container é o seu ID curto). Os limites de alarme, o caminho do arquivo
+        de alertas e os parâmetros do cliente Kafka (detecção de falha, commit, polling e
+        reconexão com recuo exponencial) vêm todos de variáveis de ambiente.
         """
         self.bootstrap_servers: str = os.getenv(
-            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092"
+            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
         self.group_id: str = os.getenv("KAFKA_GROUP_ID", "smartfactory-processors")
 
-        # Define identificador com base em HOSTNAME ou variável explícita
         default_id = socket.gethostname()
         self.consumer_id: str = os.getenv("CONSUMER_ID", f"consumer-{default_id}")
 
-        # Limites operacionais de telemetria
         self.warn_temp: float = float(os.getenv("WARN_TEMP", "75.0"))
         self.max_temp: float = float(os.getenv("MAX_TEMP", "85.0"))
         self.warn_vibration: float = float(os.getenv("WARN_VIBRATION", "4.0"))
@@ -164,9 +181,32 @@ class SmartFactoryConsumer:
         self.warn_power_kw: float = float(os.getenv("WARN_POWER_KW", "25.0"))
         self.max_power_kw: float = float(os.getenv("MAX_POWER_KW", "30.0"))
 
-        # Arquivo compartilhado de alertas
         self.alert_log_path: str = os.getenv(
             "ALERT_LOG_PATH", "/var/log/smartfactory/alerts.log"
+        )
+
+        self.auto_offset_reset: str = os.getenv("AUTO_OFFSET_RESET", "earliest")
+        self.auto_commit_interval_ms: int = int(
+            os.getenv("AUTO_COMMIT_INTERVAL_MS", "2000")
+        )
+        self.session_timeout_ms: int = int(os.getenv("SESSION_TIMEOUT_MS", "10000"))
+        self.heartbeat_interval_ms: int = int(os.getenv("HEARTBEAT_INTERVAL_MS", "3000"))
+        self.max_poll_interval_ms: int = int(os.getenv("MAX_POLL_INTERVAL_MS", "300000"))
+        self.metadata_max_age_ms: int = int(
+            os.getenv("CONSUMER_METADATA_MAX_AGE_MS", "10000")
+        )
+        self.poll_timeout_ms: int = int(os.getenv("POLL_TIMEOUT_MS", "1000"))
+        self.poll_max_records: int = int(os.getenv("POLL_MAX_RECORDS", "50"))
+        self.processing_delay_seg: float = (
+            float(os.getenv("PROCESSING_DELAY_MS", "0")) / 1000.0
+        )
+
+        self.connect_max_retries: int = int(os.getenv("CONNECT_MAX_RETRIES", "30"))
+        self.connect_retry_delay: float = float(
+            os.getenv("CONNECT_RETRY_DELAY_SEG", "3.0")
+        )
+        self.connect_retry_max_delay: float = float(
+            os.getenv("CONNECT_RETRY_MAX_DELAY_SEG", "30.0")
         )
 
         self.running: bool = True
@@ -213,17 +253,18 @@ class SmartFactoryConsumer:
         )
         self.running = False
 
-    def connect(self, max_retries: int = 30, retry_delay: float = 3.0) -> None:
+    def connect(self) -> None:
         """
         Conecta ao cluster Apache Kafka com assinatura no tópico e registro do listener.
 
-        Args:
-            max_retries (int): Número máximo de tentativas de conexão.
-            retry_delay (float): Intervalo em segundos entre cada tentativa.
+        Em caso de falha, a espera entre tentativas começa em `connect_retry_delay`, dobra
+        a cada erro e é limitada a `connect_retry_max_delay` (recuo exponencial), até
+        `connect_max_retries` tentativas.
 
         Raises:
             SystemExit: Se o cluster estiver inacessível após todas as tentativas.
         """
+        max_retries = self.connect_max_retries
         retries = 0
         rebalance_listener = SmartFactoryRebalanceListener(self.consumer_id)
 
@@ -235,25 +276,47 @@ class SmartFactoryConsumer:
                     retries + 1,
                     max_retries,
                 )
+                def _safe_deserialize(m: bytes) -> Optional[Dict[str, Any]]:
+                    """
+                    Converte o corpo de uma mensagem em dicionário sem nunca lançar exceção.
+
+                    Args:
+                        m (bytes): Valor bruto da mensagem Kafka.
+
+                    Returns:
+                        Optional[Dict[str, Any]]: O JSON decodificado, ou None se a mensagem
+                        estiver vazia ou não for um JSON válido (tráfego de benchmark, por exemplo).
+                    """
+                    if not m:
+                        return None
+                    try:
+                        return json.loads(m.decode("utf-8"))
+                    except Exception:
+                        return None
+
                 self.consumer = KafkaConsumer(
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     group_id=self.group_id,
                     client_id=self.consumer_id,
-                    auto_offset_reset="earliest",
+                    auto_offset_reset=self.auto_offset_reset,
                     enable_auto_commit=True,
-                    auto_commit_interval_ms=2000,
-                    value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-                    session_timeout_ms=10000,
-                    heartbeat_interval_ms=3000,
-                    max_poll_interval_ms=300000,
+                    auto_commit_interval_ms=self.auto_commit_interval_ms,
+                    value_deserializer=_safe_deserialize,
+                    session_timeout_ms=self.session_timeout_ms,
+                    heartbeat_interval_ms=self.heartbeat_interval_ms,
+                    max_poll_interval_ms=self.max_poll_interval_ms,
+                    metadata_max_age_ms=self.metadata_max_age_ms,
                 )
 
-                # Assina o tópico passando o listener de rebalanceamento
                 self.consumer.subscribe([self.topic], listener=rebalance_listener)
                 logger.info("Assinatura realizada no tópico '%s'. Aguardando mensagens...", self.topic)
                 return
             except (NoBrokersAvailable, KafkaError) as err:
                 retries += 1
+                retry_delay = min(
+                    self.connect_retry_delay * (2 ** (retries - 1)),
+                    self.connect_retry_max_delay,
+                )
                 logger.warning(
                     "Falha ao conectar aos brokers (%s). Tentando novamente em %.1f segundos...",
                     str(err),
@@ -267,6 +330,11 @@ class SmartFactoryConsumer:
     def evaluate_telemetry(self, data: Dict[str, Any]) -> Tuple[str, List[str]]:
         """
         Avalia as métricas do sensor contra as regras de detecção de anomalia.
+
+        Cada grandeza (temperatura, vibração e consumo) é comparada com dois limites inclusivos:
+        igual ou acima do limite de aviso gera `WARNING`; igual ou acima do crítico gera
+        `CRITICAL`. A severidade final é a mais alta entre as três grandezas e cada violação
+        acrescenta uma descrição à lista de motivos.
 
         Args:
             data (Dict[str, Any]): Dicionário com as métricas do sensor.
@@ -283,7 +351,6 @@ class SmartFactoryConsumer:
         vib = float(data.get("vibracao", 0.0))
         kw = float(data.get("consumo_energia_kw", 0.0))
 
-        # Validação de temperatura
         if temp >= self.max_temp:
             severity = "CRITICAL"
             reasons.append(f"Temperatura CRÍTICA ({temp:.1f}°C >= {self.max_temp:.1f}°C)")
@@ -292,7 +359,6 @@ class SmartFactoryConsumer:
                 severity = "WARNING"
             reasons.append(f"Temperatura ELEVADA ({temp:.1f}°C >= {self.warn_temp:.1f}°C)")
 
-        # Validação de vibração mecânica
         if vib >= self.max_vibration:
             severity = "CRITICAL"
             reasons.append(f"Vibração CRÍTICA ({vib:.2f}mm/s >= {self.max_vibration:.2f}mm/s)")
@@ -301,7 +367,6 @@ class SmartFactoryConsumer:
                 severity = "WARNING"
             reasons.append(f"Vibração ELEVADA ({vib:.2f}mm/s >= {self.warn_vibration:.2f}mm/s)")
 
-        # Validação de consumo de energia elétrica
         if kw >= self.max_power_kw:
             severity = "CRITICAL"
             reasons.append(f"Consumo CRÍTICO ({kw:.1f}kW >= {self.max_power_kw:.1f}kW)")
@@ -343,7 +408,6 @@ class SmartFactoryConsumer:
         }
 
         try:
-            # Garante que o diretório de destino exista
             os.makedirs(os.path.dirname(self.alert_log_path), exist_ok=True)
             with open(self.alert_log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(alert_record, ensure_ascii=False) + "\n")
@@ -356,7 +420,10 @@ class SmartFactoryConsumer:
         Executa o loop contínuo de polling e consumo de mensagens do Apache Kafka.
 
         Processa registros em lotes curtos, avalia cada telemetria, atualiza logs estruturados
-        e registra alertas caso anomalias operacionais sejam identificadas.
+        e registra alertas caso anomalias operacionais sejam identificadas. O poll usa um
+        timeout curto para que o laço reaja rapidamente aos sinais de parada. Mensagens que não
+        são um JSON de telemetria (por exemplo, tráfego de benchmark) são descartadas; leituras
+        normais vão para o log e as anômalas também para o arquivo compartilhado de alertas.
         """
         self._setup_signal_handlers()
         self.connect()
@@ -365,8 +432,9 @@ class SmartFactoryConsumer:
 
         try:
             while self.running:
-                # Polling periódico com timeout curto para manter resposta a sinais de parada
-                records = self.consumer.poll(timeout_ms=1000, max_records=50)
+                records = self.consumer.poll(
+                    timeout_ms=self.poll_timeout_ms, max_records=self.poll_max_records
+                )
 
                 if not records:
                     continue
@@ -374,7 +442,13 @@ class SmartFactoryConsumer:
                 for topic_partition, messages in records.items():
                     for msg in messages:
                         try:
-                            payload: Dict[str, Any] = msg.value
+                            payload: Optional[Dict[str, Any]] = msg.value
+                            if not isinstance(payload, dict):
+                                continue
+
+                            if self.processing_delay_seg > 0:
+                                time.sleep(self.processing_delay_seg)
+
                             severity, reasons = self.evaluate_telemetry(payload)
 
                             sensor_id = payload.get("sensor_id", "N/A")
@@ -384,7 +458,6 @@ class SmartFactoryConsumer:
                             kw = payload.get("consumo_energia_kw", 0.0)
 
                             if severity in ("WARNING", "CRITICAL"):
-                                # Imprime alerta destacado no stdout
                                 logger.warning(
                                     "[ALERTA %s] [Partição %d | Offset %d] Sensor: %s (%s) | Motivos: %s | T: %.1f°C | V: %.2fmm/s | Pot: %.1fkW",
                                     severity,
@@ -397,7 +470,6 @@ class SmartFactoryConsumer:
                                     vib,
                                     kw,
                                 )
-                                # Grava no arquivo de alertas compartilhado
                                 self.record_alert(
                                     severity=severity,
                                     reasons=reasons,
@@ -406,7 +478,6 @@ class SmartFactoryConsumer:
                                     offset=msg.offset,
                                 )
                             else:
-                                # Registro normal de operação
                                 logger.info(
                                     "[NORMAL] [Partição %d | Offset %d] Sensor: %s (%s) | T: %.1f°C | V: %.2fmm/s | Pot: %.1fkW",
                                     msg.partition,

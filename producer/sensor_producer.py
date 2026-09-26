@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import signal
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -27,7 +28,6 @@ from kafka import KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 
 
-# Configuração estruturada de logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -47,12 +47,32 @@ class SensorTelemetryProducer:
     automáticas com recuo exponencial (exponential backoff).
 
     Attributes:
-        bootstrap_servers (str): Lista de endereços dos brokers Kafka (ex: 'kafka-1:9092,kafka-2:9092').
+        bootstrap_servers (str): Lista de endereços dos brokers Kafka (ex: 'kafka-1:9092,kafka-2:9092,kafka-3:9092').
         topic (str): Nome do tópico Kafka de destino (ex: 'dados-sensores').
         sensor_id (str): Identificador exclusivo do sensor físico (ex: 'sensor-usinagem-01').
         sensor_setor (str): Setor fabril onde o sensor está alocado (ex: 'linha_producao').
         intervalo_envio (float): Intervalo em segundos entre cada medição transmitida.
         chance_anomalia (float): Probabilidade percentual (0 a 100) de gerar leitura fora dos limites operacionais.
+        acks (str): Nível de confirmação exigido do broker ('all' espera todas as réplicas em sincronia).
+        producer_retries (int): Reenvios automáticos do cliente Kafka em caso de erro transitório.
+        request_timeout_ms (int): Tempo máximo (ms) para um lote ser confirmado antes de ser descartado.
+            Deve superar o tempo de failover do líder do quórum KRaft.
+        metadata_max_age_ms (int): Idade máxima (ms) dos metadados do cluster antes de renová-los,
+            evitando manter líderes de partição desatualizados após a queda de um broker.
+        connect_max_retries (int): Número máximo de tentativas de conexão inicial ao cluster.
+        connect_retry_delay (float): Espera inicial (s) entre tentativas; dobra a cada falha.
+        connect_retry_max_delay (float): Limite (s) da espera entre tentativas de conexão.
+        temp_base (float): Temperatura nominal do setor, em °C.
+        vib_base (float): Vibração nominal do setor, em mm/s.
+        kw_base (float): Consumo nominal do setor, em kW.
+        ruido_temp (float): Desvio padrão do ruído gaussiano da temperatura.
+        ruido_vib (float): Desvio padrão do ruído gaussiano da vibração.
+        ruido_kw (float): Desvio padrão do ruído gaussiano do consumo.
+        max_temp (float): Limite crítico de temperatura (°C); as anomalias são geradas acima dele.
+        max_vibration (float): Limite crítico de vibração (mm/s).
+        max_power_kw (float): Limite crítico de consumo (kW).
+        anomalia_fator_min (float): Menor múltiplo do limite crítico usado numa leitura anômala.
+        anomalia_fator_max (float): Maior múltiplo do limite crítico usado numa leitura anômala.
         running (bool): Flag de controle do ciclo de vida da execução.
         producer (KafkaProducer): Instância do cliente produtor do Apache Kafka.
     """
@@ -60,17 +80,54 @@ class SensorTelemetryProducer:
     def __init__(self) -> None:
         """
         Inicializa o produtor de telemetria carregando as variáveis de ambiente necessárias.
+
+        Todos os parâmetros vêm do ambiente (ver config/sensor_thresholds.env e o docker-compose.yml).
+        Quando SENSOR_ID não é informado (caso das réplicas criadas com `--scale`), o identificador
+        é derivado do setor e do hostname do container. As anomalias são geradas acima dos limites
+        críticos configurados (MAX_*), de modo que acompanhem qualquer ajuste feito nesses limites.
         """
         self.bootstrap_servers: str = os.getenv(
-            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092"
+            "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
-        self.sensor_id: str = os.getenv("SENSOR_ID", "sensor-generico-01")
         self.sensor_setor: str = os.getenv("SENSOR_SETOR", "linha_producao")
+        self.sensor_id: str = os.getenv(
+            "SENSOR_ID", f"sensor-{self.sensor_setor}-{socket.gethostname()}"
+        )
         self.intervalo_envio: float = float(os.getenv("INTERVALO_ENVIO_SEG", "2.0"))
         self.chance_anomalia: float = float(
             os.getenv("CHANCE_ANOMALIA_PERCENTUAL", "15.0")
         )
+
+        self.acks: str = os.getenv("PRODUCER_ACKS", "all")
+        self.producer_retries: int = int(os.getenv("PRODUCER_RETRIES", "5"))
+        self.request_timeout_ms: int = int(
+            os.getenv("PRODUCER_REQUEST_TIMEOUT_MS", "45000")
+        )
+        self.metadata_max_age_ms: int = int(
+            os.getenv("PRODUCER_METADATA_MAX_AGE_MS", "10000")
+        )
+        self.connect_max_retries: int = int(os.getenv("CONNECT_MAX_RETRIES", "30"))
+        self.connect_retry_delay: float = float(
+            os.getenv("CONNECT_RETRY_DELAY_SEG", "3.0")
+        )
+        self.connect_retry_max_delay: float = float(
+            os.getenv("CONNECT_RETRY_MAX_DELAY_SEG", "30.0")
+        )
+
+        self.temp_base: float = float(os.getenv("TEMP_BASE", "50.0"))
+        self.vib_base: float = float(os.getenv("VIB_BASE", "2.0"))
+        self.kw_base: float = float(os.getenv("KW_BASE", "15.0"))
+        self.ruido_temp: float = float(os.getenv("RUIDO_TEMPERATURA", "2.0"))
+        self.ruido_vib: float = float(os.getenv("RUIDO_VIBRACAO", "0.4"))
+        self.ruido_kw: float = float(os.getenv("RUIDO_POTENCIA_KW", "1.5"))
+
+        self.max_temp: float = float(os.getenv("MAX_TEMP", "85.0"))
+        self.max_vibration: float = float(os.getenv("MAX_VIBRATION", "5.0"))
+        self.max_power_kw: float = float(os.getenv("MAX_POWER_KW", "30.0"))
+        self.anomalia_fator_min: float = float(os.getenv("ANOMALIA_FATOR_MIN", "1.02"))
+        self.anomalia_fator_max: float = float(os.getenv("ANOMALIA_FATOR_MAX", "1.5"))
+
         self.running: bool = True
         self.producer: KafkaProducer = None
 
@@ -104,20 +161,19 @@ class SensorTelemetryProducer:
         )
         self.running = False
 
-    def connect(self, max_retries: int = 30, retry_delay: float = 3.0) -> None:
+    def connect(self) -> None:
         """
         Estabelece a conexão com o cluster Apache Kafka com política de repetição.
 
         Caso os brokers ainda estejam em fase de inicialização ou eleição de quórum KRaft,
-        o método aguarda e tenta novamente até que o limite estipulado seja atingido.
-
-        Args:
-            max_retries (int): Número máximo de tentativas de conexão.
-            retry_delay (float): Tempo em segundos entre as tentativas.
+        o método aguarda e tenta novamente com recuo exponencial: a espera começa em
+        `connect_retry_delay`, dobra a cada falha e é limitada a `connect_retry_max_delay`,
+        até `connect_max_retries` tentativas (todos configurados por variáveis de ambiente).
 
         Raises:
             SystemExit: Caso todas as tentativas de conexão se esgotem sem sucesso.
         """
+        max_retries = self.connect_max_retries
         retries = 0
         while self.running and retries < max_retries:
             try:
@@ -131,15 +187,20 @@ class SensorTelemetryProducer:
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                     key_serializer=lambda k: k.encode("utf-8") if k else None,
-                    acks="all",  # Garante confirmação de escrita das réplicas em sincronia (ISR)
-                    retries=5,
+                    acks=self.acks,  # "all": confirmação de todas as réplicas em sincronia (ISR)
+                    retries=self.producer_retries,
                     max_in_flight_requests_per_connection=1,
-                    request_timeout_ms=15000,
+                    request_timeout_ms=self.request_timeout_ms,
+                    metadata_max_age_ms=self.metadata_max_age_ms,
                 )
                 logger.info("Conexão com cluster Kafka estabelecida com sucesso!")
                 return
             except (NoBrokersAvailable, KafkaError) as err:
                 retries += 1
+                retry_delay = min(
+                    self.connect_retry_delay * (2 ** (retries - 1)),
+                    self.connect_retry_max_delay,
+                )
                 logger.warning(
                     "Brokers indisponíveis (%s). Nova tentativa em %.1f segundos...",
                     str(err),
@@ -155,10 +216,13 @@ class SensorTelemetryProducer:
 
     def generate_telemetry_payload(self) -> Dict[str, Any]:
         """
-        Gera uma leitura de telemetria industrial com base nos padrões do setor.
+        Gera uma leitura de telemetria industrial com base no perfil do setor.
 
-        Possui lógica estocástica para injetar anomalias de temperatura, vibração
-        ou sobretensão elétrica de acordo com o percentual estipulado em `chance_anomalia`.
+        O perfil nominal (TEMP_BASE, VIB_BASE, KW_BASE) e o ruído vêm de variáveis de
+        ambiente. Possui lógica estocástica para injetar anomalias de temperatura, vibração
+        ou sobretensão elétrica de acordo com o percentual estipulado em `chance_anomalia`;
+        os valores anômalos ficam entre o limite crítico (MAX_*) multiplicado por
+        ANOMALIA_FATOR_MIN e por ANOMALIA_FATOR_MAX, acompanhando os limites configurados.
 
         Returns:
             Dict[str, Any]: Dicionário contendo os dados da telemetria:
@@ -169,44 +233,26 @@ class SensorTelemetryProducer:
                 - consumo_energia_kw (float): Potência consumida em kW.
                 - timestamp (str): Carimbo de data/hora no padrão ISO 8601 UTC.
         """
-        # Valores base de operação normal por setor
-        setor_profiles = {
-            "linha_producao": {"temp_base": 65.0, "vib_base": 2.5, "kw_base": 15.0},
-            "refrigeracao": {"temp_base": 5.0, "vib_base": 1.8, "kw_base": 22.0},
-            "empacotamento": {"temp_base": 45.0, "vib_base": 2.0, "kw_base": 12.0},
-            "fundicao": {"temp_base": 80.0, "vib_base": 3.2, "kw_base": 28.0},
-        }
-
-        profile = setor_profiles.get(
-            self.sensor_setor,
-            {"temp_base": 50.0, "vib_base": 2.0, "kw_base": 15.0},
-        )
-
         is_anomaly = random.uniform(0, 100) < self.chance_anomalia
 
+        temp = self.temp_base + random.gauss(0, self.ruido_temp)
+        vibracao = max(0.1, self.vib_base + random.gauss(0, self.ruido_vib))
+        consumo_kw = max(1.0, self.kw_base + random.gauss(0, self.ruido_kw))
+
         if is_anomaly:
-            # Injeta valores anômalos que violam os limites operacionais
             anomaly_type = random.choice(["temp", "vib", "power", "multi"])
-            temp = (
-                random.uniform(86.0, 105.0)
-                if anomaly_type in ("temp", "multi")
-                else profile["temp_base"] + random.gauss(0, 2.0)
-            )
-            vibracao = (
-                random.uniform(5.1, 8.5)
-                if anomaly_type in ("vib", "multi")
-                else profile["vib_base"] + random.gauss(0, 0.3)
-            )
-            consumo_kw = (
-                random.uniform(31.0, 48.0)
-                if anomaly_type in ("power", "multi")
-                else profile["kw_base"] + random.gauss(0, 1.0)
-            )
-        else:
-            # Operação nominal com ruído gaussiano suave
-            temp = profile["temp_base"] + random.gauss(0, 2.0)
-            vibracao = max(0.1, profile["vib_base"] + random.gauss(0, 0.4))
-            consumo_kw = max(1.0, profile["kw_base"] + random.gauss(0, 1.5))
+            if anomaly_type in ("temp", "multi"):
+                temp = self.max_temp * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
+            if anomaly_type in ("vib", "multi"):
+                vibracao = self.max_vibration * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
+            if anomaly_type in ("power", "multi"):
+                consumo_kw = self.max_power_kw * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
 
         payload: Dict[str, Any] = {
             "sensor_id": self.sensor_id,
@@ -247,7 +293,10 @@ class SensorTelemetryProducer:
         Inicia o loop contínuo de publicação de telemetria dos sensores.
 
         Executa periodicamente a geração de métricas e o envio ao Kafka até que um
-        sinal de terminação seja interceptado.
+        sinal de terminação seja interceptado. Cada mensagem usa o `sensor_id` como chave,
+        o que garante que todas as leituras de um mesmo sensor sigam para a mesma partição
+        (ordem preservada por sensor). O envio é assíncrono: o resultado chega pelos
+        callbacks `on_send_success` e `on_send_error`.
         """
         self._setup_signal_handlers()
         self.connect()
@@ -262,7 +311,6 @@ class SensorTelemetryProducer:
         try:
             while self.running:
                 payload = self.generate_telemetry_payload()
-                # A chave garante o particionamento consistente baseado no ID do sensor
                 future = self.producer.send(
                     self.topic,
                     key=self.sensor_id,

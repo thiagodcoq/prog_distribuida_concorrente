@@ -1,0 +1,8 @@
+Reading payloads from: /tmp/payload.json
+Number of messages read: 1
+252 records sent, 50.3 records/sec (0.01 MB/sec), 9.9 ms avg latency, 276.0 ms max latency.
+251 records sent, 50.0 records/sec (0.01 MB/sec), 5.3 ms avg latency, 71.0 ms max latency.
+251 records sent, 50.0 records/sec (0.01 MB/sec), 3.7 ms avg latency, 55.0 ms max latency.
+251 records sent, 50.0 records/sec (0.01 MB/sec), 2.8 ms avg latency, 59.0 ms max latency.
+250 records sent, 50.0 records/sec (0.01 MB/sec), 2.8 ms avg latency, 18.0 ms max latency.
+1500 records sent, 50.001667 records/sec (0.01 MB/sec), 4.61 ms avg latency, 276.00 ms max latency, 3 ms 50th, 8 ms 95th, 59 ms 99th, 132 ms 99.9th.

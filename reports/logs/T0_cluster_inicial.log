@@ -1,0 +1,64 @@
+================================================================================
+ T0: ESTADO INICIAL DO CLUSTER
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:51:52Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : nenhum
+================================================================================
+
+>>> [00:51:52] Containers em execução
+    NAME                      SERVICE                   STATUS
+    smartfactory-consumer-1   consumer                  Up 3 seconds
+    smartfactory-consumer-2   consumer                  Up 3 seconds
+    smartfactory-consumer-3   consumer                  Up 2 seconds
+    smartfactory-kafka-1      kafka-1                   Up 20 seconds (healthy)
+    smartfactory-kafka-2      kafka-2                   Up 20 seconds (healthy)
+    smartfactory-kafka-3      kafka-3                   Up 20 seconds (healthy)
+    smartfactory-producer-1   producer-linha-producao   Up 3 seconds
+    smartfactory-producer-2   producer-refrigeracao     Up 3 seconds
+    smartfactory-producer-3   producer-empacotamento    Up 3 seconds
+    smartfactory-producer-4   producer-fundicao         Up 3 seconds
+    [PASS] 3 brokers Kafka saudáveis (healthcheck)
+    [PASS] 4 produtores (sensores) em execução
+    [PASS] 3 consumidores em execução
+
+>>> [00:51:53] Quórum KRaft (kafka-metadata-quorum.sh describe --status)
+    ClusterId:              Some(4L622nShTUiBenYhCy-0bw)
+    LeaderId:               2
+    LeaderEpoch:            1
+    HighWatermark:          112
+    MaxFollowerLag:         0
+    MaxFollowerLagTimeMs:   142
+    CurrentVoters:          [1,2,3]
+    CurrentObservers:       []
+    [PASS] Quórum com 3 votantes (maioria = 2)
+
+>>> [00:51:55] Tópico dados-sensores
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2,3
+    	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,3,1
+    	Topic: dados-sensores	Partition: 2	Leader: 3	Replicas: 3,1,2	Isr: 3,1,2
+    [PASS] PartitionCount = 3
+    [PASS] ReplicationFactor = 3
+    [PASS] min.insync.replicas = 2
+    [PASS] Todas as partições com ISR completo (3 réplicas em sincronia)
+    [PASS] Liderança das partições distribuída entre mais de um broker
+
+>>> [00:51:59] Dados chegando em TODAS as partições (aguarda até 90 s)
+    [PASS] Partição 0 recebeu mensagens (log-end-offset = 7)
+    [PASS] Partição 1 recebeu mensagens (log-end-offset = 15)
+    [PASS] Partição 2 recebeu mensagens (log-end-offset = 9)
+
+>>> [00:52:06] Consumer group
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          16              17              1               consumer-a7cd003a25d8-1d6f7dcb-e344-4a83-a455-d813e1e7dbf1 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  0          9               9               0               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          9               9               0               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+    [PASS] Grupo com 3 membros
+
+================================================================================
+ RESULTADO: PASS (13/13 verificações)  |  evidência: reports/logs/T0_cluster_inicial.log
+================================================================================

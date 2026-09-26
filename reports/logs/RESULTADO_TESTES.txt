@@ -1,0 +1,17 @@
+RESULTADO DA SUÍTE DE TESTES  (2026-09-26T01:04:51Z, commit 3905ea1)
+--------------------------------------------------------------------------
+ID    Teste                                                Res.  Tempo
+T0    Estado inicial do cluster                            PASS    17s
+T1    Balanceamento de partições                         PASS    18s
+T2a   Falha de consumidor (graceful)                       PASS    27s
+T2b   Falha de consumidor (hard, SIGKILL)                  PASS    40s
+T3a   Falha de broker seguidor (graceful)                  PASS    54s
+T3b   Falha de controller (hard) + T9 pcap                 PASS    86s
+T4    Comportamento sob carga (100k msgs)                  PASS    19s
+T5    Elasticidade de consumidores (1 a 5)                 PASS   256s
+T6    Escala de sensores                                   PASS   122s
+T7    Limite: 2 de 3 brokers fora                          PASS   128s
+T8    Persistência dos alertas                            PASS    11s
+T10   Testes unitários (regras de severidade)             PASS     1s
+
+TODOS OS TESTES PASSARAM

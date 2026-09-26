@@ -1,0 +1,14 @@
+RESUMO DA CAPTURA: reports/pcaps/failover_broker.pcap  (31126 bytes)
+Capturado na pilha de rede de smartfactory-producer-1 (cliente/sensor) | falha: SIGKILL em kafka-2 (172.19.0.3)
+Gerado em 2026-09-26T00:55:54Z por scripts/capture_failover_pcap.sh
+
+broker     ip                   SYN->      FIN<-        RST<- pacotes c/ dados
+kafka-1    172.19.0.2               1          0            0             44
+kafka-2    172.19.0.3              35          1            1             34  <-- derrubado
+kafka-3    172.19.0.4               0          0            0              0
+
+Legenda: SYN-> tentativas de conexão do cliente ao broker (sem resposta = broker morto); FIN<-/RST<- encerramentos enviados pelo broker.
+O sensor capturado só fala com os líderes das partições que usa; brokers sem pacotes de dados não lideram essas partições.
+Filtros úteis no Wireshark:  ip.addr==172.19.0.3 && (tcp.flags.fin==1 || tcp.flags.reset==1)
+                             tcp.flags.syn==1 && tcp.flags.ack==0        (reconexões)
+                             kafka                                       (decodifica o protocolo)

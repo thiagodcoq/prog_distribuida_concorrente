@@ -1,39 +1,61 @@
 ================================================================================
-RELATÓRIO DE SAÚDE E STATUS DO CLUSTER KAFKA SMARTFACTORY
-Data/Hora: 2026-09-24T10:35:00Z
+ DIAGNÓSTICO DE SAÚDE DO CLUSTER SMARTFACTORY
+================================================================================
+Data/hora (UTC) : 2026-09-26T01:07:25Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : nenhum
 ================================================================================
 
-[1. STATUS DOS CONTAINERS EM EXECUÇÃO]
-NAME                     IMAGE                         COMMAND                  SERVICE                   CREATED          STATUS          PORTS
-smartfactory-consumer-1  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
-smartfactory-consumer-2  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
-smartfactory-consumer-3  smartfactory-consumer:latest  "python data_process…"   consumer                  20 minutes ago   Up 20 minutes   
-smartfactory-kafka-1     apache/kafka:3.7.0            "/__cacert_entrypoin…"   kafka-1                   25 minutes ago   Up 25 minutes   0.0.0.0:9092->9092/tcp
-smartfactory-kafka-2     apache/kafka:3.7.0            "/__cacert_entrypoin…"   kafka-2                   25 minutes ago   Up 25 minutes   0.0.0.0:9094->9092/tcp
-smartfactory-producer-1  smartfactory-producer:latest  "python sensor_produ…"   producer-linha-producao   20 minutes ago   Up 20 minutes   
-smartfactory-producer-2  smartfactory-producer:latest  "python sensor_produ…"   producer-refrigeracao     20 minutes ago   Up 20 minutes   
-smartfactory-producer-3  smartfactory-producer:latest  "python sensor_produ…"   producer-empacotamento    20 minutes ago   Up 20 minutes   
-smartfactory-producer-4  smartfactory-producer:latest  "python sensor_produ…"   producer-fundicao         20 minutes ago   Up 20 minutes   
+>>> [01:07:25] 1. Containers
+    NAME                      SERVICE                   STATUS
+    smartfactory-consumer-3   consumer                  Up 2 minutes
+    smartfactory-consumer-4   consumer                  Up 2 minutes
+    smartfactory-consumer-5   consumer                  Up 2 minutes
+    smartfactory-kafka-1      kafka-1                   Up 13 minutes (healthy)
+    smartfactory-kafka-2      kafka-2                   Up 3 minutes (healthy)
+    smartfactory-kafka-3      kafka-3                   Up 3 minutes (healthy)
+    smartfactory-producer-1   producer-linha-producao   Up 15 minutes
+    smartfactory-producer-2   producer-refrigeracao     Up 15 minutes
+    smartfactory-producer-3   producer-empacotamento    Up 15 minutes
+    smartfactory-producer-4   producer-fundicao         Up 15 minutes
 
-[2. DETALHES DO TÓPICO 'dados-sensores' (Líderes, Réplicas e ISRs)]
-Topic: dados-sensores	TopicId: MkU3OEVBNTcwNTJENDM2Qk	PartitionCount: 3	ReplicationFactor: 2	Configs: min.insync.replicas=1
-	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2	Isr: 1,2
-	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,1	Isr: 2,1
-	Topic: dados-sensores	Partition: 2	Leader: 1	Replicas: 1,2	Isr: 1,2
+>>> [01:07:25] 2. Quórum KRaft (controllers)
+    ClusterId:              Some(4L622nShTUiBenYhCy-0bw)
+    LeaderId:               3
+    LeaderEpoch:            44
+    HighWatermark:          2285
+    MaxFollowerLag:         0
+    MaxFollowerLagTimeMs:   338
+    CurrentVoters:          [1,2,3]
+    CurrentObservers:       []
 
-[3. DISTRIBUIÇÃO E LAG DO CONSUMER GROUP 'smartfactory-processors']
-GROUP                  TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID      HOST         CLIENT-ID
-smartfactory-processors dados-sensores  0          1250            1250            0               consumer-1-...   172.28.0.7   consumer-1
-smartfactory-processors dados-sensores  1          1245            1245            0               consumer-2-...   172.28.0.8   consumer-2
-smartfactory-processors dados-sensores  2          1260            1260            0               consumer-3-...   172.28.0.9   consumer-3
+>>> [01:07:26] 3. Tópico dados-sensores (líderes, réplicas e ISR)
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2,3
+    	Topic: dados-sensores	Partition: 1	Leader: 1	Replicas: 2,3,1	Isr: 1,3,2
+    	Topic: dados-sensores	Partition: 2	Leader: 1	Replicas: 3,1,2	Isr: 1,3,2
 
-[4. RESUMO DO ARQUIVO PERSISTENTE DE ALERTAS (/var/log/smartfactory/alerts.log)]
-Total de anomalias registradas : 98
-  - Alertas CRÍTICOS          : 34
-  - Alertas de AVISO (WARNING): 64
+>>> [01:07:27] 4. Consumer group smartfactory-processors (distribuição e lag)
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          39948           39948           0               consumer-bf999ba3130e-42049ac9-2953-4131-83a5-7dc31429a5e1 /172.19.0.6     consumer-bf999ba3130e
+    smartfactory-processors dados-sensores  0          38259           38259           0               consumer-119e6ed3a6a2-cd669841-a8e6-4040-99f5-635a44ff69ea /172.19.0.10    consumer-119e6ed3a6a2
+    smartfactory-processors dados-sensores  2          38721           38722           1               consumer-debd217071db-568cf409-a7db-4a99-9b54-71feef3378f4 /172.19.0.11    consumer-debd217071db
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-bf999ba3130e-42049ac9-2953-4131-83a5-7dc31429a5e1 /172.19.0.6     consumer-bf999ba3130e 1               
+    smartfactory-processors consumer-119e6ed3a6a2-cd669841-a8e6-4040-99f5-635a44ff69ea /172.19.0.10    consumer-119e6ed3a6a2 1               
+    smartfactory-processors consumer-debd217071db-568cf409-a7db-4a99-9b54-71feef3378f4 /172.19.0.11    consumer-debd217071db 1               
 
-Últimos 3 alertas registrados:
-{"timestamp": "2026-09-24T10:34:45.120Z", "consumer_id": "consumer-1", "partition": 0, "offset": 1248, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Temperatura CRÍTICA (92.4°C >= 85.0°C)"], "telemetry": {"sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "temperatura": 92.4, "vibracao": 3.12, "consumo_energia_kw": 18.4, "timestamp": "2026-09-24T10:34:45.118Z"}}
-{"timestamp": "2026-09-24T10:34:48.330Z", "consumer_id": "consumer-2", "partition": 1, "offset": 1243, "severity": "WARNING", "sensor_id": "sensor-chiller-01", "setor": "refrigeracao", "reasons": ["Vibração ELEVADA (4.35mm/s >= 4.00mm/s)"], "telemetry": {"sensor_id": "sensor-chiller-01", "setor": "refrigeracao", "temperatura": 6.8, "vibracao": 4.35, "consumo_energia_kw": 23.1, "timestamp": "2026-09-24T10:34:48.328Z"}}
-{"timestamp": "2026-09-24T10:34:52.910Z", "consumer_id": "consumer-3", "partition": 2, "offset": 1259, "severity": "CRITICAL", "sensor_id": "sensor-forno-01", "setor": "fundicao", "reasons": ["Consumo CRÍTICO (38.7kW >= 30.0kW)", "Temperatura CRÍTICA (96.1°C >= 85.0°C)"], "telemetry": {"sensor_id": "sensor-forno-01", "setor": "fundicao", "temperatura": 96.1, "vibracao": 2.9, "consumo_energia_kw": 38.7, "timestamp": "2026-09-24T10:34:52.905Z"}}
-================================================================================
+>>> [01:07:30] 5. Alertas persistidos (/var/log/smartfactory/alerts.log)
+    Total de anomalias registradas: 289
+      - CRITICAL: 259
+      - WARNING : 30
+    Últimos 3 alertas:
+    {"timestamp": "2026-09-26T01:07:07.052567+00:00", "consumer_id": "consumer-119e6ed3a6a2", "partition": 0, "offset": 38248, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Vibração CRÍTICA (
+    {"timestamp": "2026-09-26T01:07:07.053674+00:00", "consumer_id": "consumer-bf999ba3130e", "partition": 1, "offset": 39929, "severity": "CRITICAL", "sensor_id": "sensor-esteira-01", "setor": "empacotamento", "reasons": ["Vibração CRÍTICA (6.
+    {"timestamp": "2026-09-26T01:07:29.082379+00:00", "consumer_id": "consumer-119e6ed3a6a2", "partition": 0, "offset": 38259, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Consumo CRÍTICO (4
+
+Diagnóstico concluído. Log salvo em: reports/logs/cluster_health.log

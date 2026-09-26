@@ -1,0 +1,10 @@
+Reading payloads from: /tmp/payload.json
+Number of messages read: 1
+252 records sent, 50.3 records/sec (0.01 MB/sec), 10.8 ms avg latency, 275.0 ms max latency.
+177 records sent, 10.9 records/sec (0.00 MB/sec), 75.3 ms avg latency, 12742.0 ms max latency.
+[2026-09-26 00:55:09,469] WARN [Producer clientId=perf-producer-client] Got error produce response with correlation id 400 on topic-partition teste-perda-0, retrying (2147483646 attempts left). Error: NOT_LEADER_OR_FOLLOWER (org.apache.kafka.clients.producer.internals.Sender)
+[2026-09-26 00:55:09,473] WARN [Producer clientId=perf-producer-client] Received invalid metadata error in produce request on partition teste-perda-0 due to org.apache.kafka.common.errors.NotLeaderOrFollowerException: For requests intended only for the leader, this error indicates that the broker is not the current leader. For requests intended for any replica, this error indicates that the broker is not a replica of the topic partition.. Going to request metadata update now (org.apache.kafka.clients.producer.internals.Sender)
+[2026-09-26 00:55:09,475] WARN [Producer clientId=perf-producer-client] Got error produce response with correlation id 402 on topic-partition teste-perda-0, retrying (2147483646 attempts left). Error: NOT_LEADER_OR_FOLLOWER (org.apache.kafka.clients.producer.internals.Sender)
+[2026-09-26 00:55:09,475] WARN [Producer clientId=perf-producer-client] Received invalid metadata error in produce request on partition teste-perda-0 due to org.apache.kafka.common.errors.NotLeaderOrFollowerException: For requests intended only for the leader, this error indicates that the broker is not the current leader. For requests intended for any replica, this error indicates that the broker is not a replica of the topic partition.. Going to request metadata update now (org.apache.kafka.clients.producer.internals.Sender)
+888 records sent, 177.4 records/sec (0.03 MB/sec), 4835.1 ms avg latency, 12744.0 ms max latency.
+1500 records sent, 49.995000 records/sec (0.01 MB/sec), 2873.63 ms avg latency, 12744.00 ms max latency, 9 ms 50th, 11436 ms 95th, 12506 ms 99th, 12742 ms 99.9th.

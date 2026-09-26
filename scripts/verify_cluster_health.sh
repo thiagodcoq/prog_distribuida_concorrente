@@ -1,69 +1,41 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script de Diagnóstico e Verificação de Saúde do Cluster SmartFactory
+# Diagnóstico e verificação de saúde do cluster SmartFactory (make health)
+#
+# Somente leitura: mostra containers, quórum KRaft, tópico (líderes/ISR), consumer
+# group (distribuição e lag) e um resumo do arquivo compartilhado de alertas.
+# Não faz asserções (para isso, veja test_cluster_inicial.sh).
 # ==============================================================================
+SCRIPT_ARGS="$*"
+source "$(dirname "$0")/lib.sh"
 
-set -e
+init_log "cluster_health.log" "DIAGNÓSTICO DE SAÚDE DO CLUSTER SMARTFACTORY"
 
-# Cores
-BLUE='\033[0;34m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+step "1. Containers"
+docker compose ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}' | block
 
-LOG_DIR="reports/logs"
-LOG_FILE="${LOG_DIR}/cluster_health.log"
-mkdir -p "${LOG_DIR}"
+step "2. Quórum KRaft (controllers)"
+quorum_status | block
 
-log() {
-    local msg="$1"
-    echo -e "$msg" | tee -a "$LOG_FILE"
-}
+step "3. Tópico $KAFKA_TOPIC (líderes, réplicas e ISR)"
+describe_topic | block
 
-echo -e "${CYAN}================================================================================"
-echo -e "       RELATÓRIO DE SAÚDE E STATUS DO CLUSTER KAFKA SMARTFACTORY"
-echo -e "================================================================================${NC}"
-echo "--- DIAGNÓSTICO DO CLUSTER: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ---" > "$LOG_FILE"
+step "4. Consumer group $KAFKA_GROUP_ID (distribuição e lag)"
+describe_group | block
+describe_members | block
 
-# 1. Status dos Containers Docker
-log "${BLUE}[1. STATUS DOS CONTAINERS EM EXECUÇÃO]${NC}"
-docker compose ps | tee -a "$LOG_FILE"
-
-# 2. Descrição do Tópico de Sensores
-log "\n${BLUE}[2. DETALHES DO TÓPICO 'dados-sensores' (Líderes, Réplicas e ISRs)]${NC}"
-docker compose exec -T kafka-1 kafka-topics.sh \
-    --bootstrap-server kafka-1:9092 \
-    --describe --topic dados-sensores 2>/dev/null || \
-docker compose exec -T kafka-2 kafka-topics.sh \
-    --bootstrap-server kafka-2:9092 \
-    --describe --topic dados-sensores | tee -a "$LOG_FILE"
-
-# 3. Estado do Consumer Group
-log "\n${BLUE}[3. DISTRIBUIÇÃO E LAG DO CONSUMER GROUP 'smartfactory-processors']${NC}"
-docker compose exec -T kafka-1 kafka-consumer-groups.sh \
-    --bootstrap-server kafka-1:9092 \
-    --describe --group smartfactory-processors 2>/dev/null || \
-docker compose exec -T kafka-2 kafka-consumer-groups.sh \
-    --bootstrap-server kafka-2:9092 \
-    --describe --group smartfactory-processors | tee -a "$LOG_FILE"
-
-# 4. Resumo de Alertas Registrados no Volume Compartilhado
-log "\n${BLUE}[4. RESUMO DO ARQUIVO PERSISTENTE DE ALERTAS (/var/log/smartfactory/alerts.log)]${NC}"
-if docker compose exec -T consumer test -f /var/log/smartfactory/alerts.log 2>/dev/null; then
-    TOTAL_ALERTS=$(docker compose exec -T consumer wc -l < /var/log/smartfactory/alerts.log | tr -d '\r')
-    CRITICAL_COUNT=$(docker compose exec -T consumer grep -c '"severity": "CRITICAL"' /var/log/smartfactory/alerts.log 2>/dev/null || echo 0)
-    WARN_COUNT=$(docker compose exec -T consumer grep -c '"severity": "WARNING"' /var/log/smartfactory/alerts.log 2>/dev/null || echo 0)
-    
-    log "Total de anomalias registradas : ${TOTAL_ALERTS}"
-    log "  - Alertas CRÍTICOS          : ${CRITICAL_COUNT}"
-    log "  - Alertas de AVISO (WARNING): ${WARN_COUNT}"
-    log "\nÚltimos 3 alertas registrados:"
-    docker compose exec -T consumer tail -n 3 /var/log/smartfactory/alerts.log | tee -a "$LOG_FILE"
+step "5. Alertas persistidos ($ALERT_LOG_PATH)"
+if docker compose exec -T consumer test -f "$ALERT_LOG_PATH" </dev/null 2>/dev/null; then
+    total=$(docker compose exec -T consumer sh -c "wc -l < $ALERT_LOG_PATH" </dev/null 2>/dev/null | tr -d ' \r')
+    critical=$(docker compose exec -T consumer grep -c '"severity": "CRITICAL"' "$ALERT_LOG_PATH" </dev/null 2>/dev/null | tr -d '\r' || true)
+    warning=$(docker compose exec -T consumer grep -c '"severity": "WARNING"' "$ALERT_LOG_PATH" </dev/null 2>/dev/null | tr -d '\r' || true)
+    log "    Total de anomalias registradas: ${total:-0}"
+    log "      - CRITICAL: ${critical:-0}"
+    log "      - WARNING : ${warning:-0}"
+    log "    Últimos 3 alertas:"
+    docker compose exec -T consumer tail -n 3 "$ALERT_LOG_PATH" </dev/null | cut -c1-240 | block
 else
-    log "${YELLOW}Arquivo de alertas ainda não gerado ou nenhum alerta registrado até o momento.${NC}"
+    log "    Arquivo de alertas ainda não gerado."
 fi
 
-log "\n${GREEN}================================================================================"
-log " Diagnóstico finalizado com sucesso! Log salvo em: ${LOG_FILE}"
-log "================================================================================${NC}"
+log "\nDiagnóstico concluído. Log salvo em: $LOG_FILE"

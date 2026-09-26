@@ -1,0 +1,70 @@
+================================================================================
+ T1: BALANCEAMENTO DE PARTIÇÕES ENTRE CONSUMIDORES
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:52:09Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : nenhum
+================================================================================
+
+>>> [00:52:09] Distribuição atual (kafka-consumer-groups.sh --describe)
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          18              20              2               consumer-a7cd003a25d8-1d6f7dcb-e344-4a83-a455-d813e1e7dbf1 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  0          10              11              1               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          10              11              1               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+
+>>> [00:52:10] Membros do grupo
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-a7cd003a25d8-1d6f7dcb-e344-4a83-a455-d813e1e7dbf1 /172.19.0.11    consumer-a7cd003a25d8 1               
+    smartfactory-processors consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7 1               
+    smartfactory-processors consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15 1               
+    [PASS] 3 consumidores no grupo
+    [PASS] Nenhum consumidor ocioso
+    [PASS] Cada consumidor com exatamente 1 partição
+    [PASS] Cada partição com um dono distinto
+
+>>> [00:52:17] Sensores por partição (chave = sensor_id, particionador murmur2 do Kafka)
+  Partição 0:
+      14 "sensor_id": "sensor-usinagem-01"
+    [PASS] Partição 0 recebe pelo menos 1 sensor
+  Partição 1:
+      16 "sensor_id": "sensor-esteira-01"
+      13 "sensor_id": "sensor-forno-01"
+    [PASS] Partição 1 recebe pelo menos 1 sensor
+  Partição 2:
+      18 "sensor_id": "sensor-chiller-02"
+    [PASS] Partição 2 recebe pelo menos 1 sensor
+    [PASS] Os 4 sensores estão distribuídos pelas partições
+
+>>> [00:52:27] Eventos do ConsumerRebalanceListener (PARTITIONS ASSIGNED)
+    consumer-3  |  [REBALANCE EVENT - PARTITIONS ASSIGNED]
+    consumer-3  |  Consumidor ID       : consumer-a7cd003a25d8
+    consumer-3  |  Partições Atribuídas: dados-sensores-P1
+    consumer-3  |  Total Atribuído     : 1
+    consumer-3  |  Timestamp           : 2026-09-26T00:51:51.485268+00:00
+    consumer-3  |  Status Operacional  : ATIVO (Processando dados)
+    consumer-3  | ================================================================================
+    --
+    consumer-2  |  [REBALANCE EVENT - PARTITIONS ASSIGNED]
+    consumer-2  |  Consumidor ID       : consumer-ffdcc7717d15
+    consumer-2  |  Partições Atribuídas: dados-sensores-P2
+    consumer-2  |  Total Atribuído     : 1
+    consumer-2  |  Timestamp           : 2026-09-26T00:51:51.492536+00:00
+    consumer-2  |  Status Operacional  : ATIVO (Processando dados)
+    consumer-2  | ================================================================================
+    --
+    consumer-1  |  [REBALANCE EVENT - PARTITIONS ASSIGNED]
+    consumer-1  |  Consumidor ID       : consumer-5015dd5001f7
+    consumer-1  |  Partições Atribuídas: dados-sensores-P0
+    consumer-1  |  Total Atribuído     : 1
+    consumer-1  |  Timestamp           : 2026-09-26T00:51:51.485235+00:00
+    consumer-1  |  Status Operacional  : ATIVO (Processando dados)
+    consumer-1  | ================================================================================
+    [PASS] Listener registrou atribuições
+
+================================================================================
+ RESULTADO: PASS (9/9 verificações)  |  evidência: reports/logs/T1_balanceamento.log
+================================================================================

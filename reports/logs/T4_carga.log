@@ -1,0 +1,44 @@
+================================================================================
+ T4: COMPORTAMENTO SOB CARGA (100000 mensagens)
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:55:54Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : registros=100000
+================================================================================
+
+>>> [00:55:54] Estado antes da carga
+    membros: 3 | lag inicial: 2
+    [PASS] Grupo com 3 consumidores antes da carga
+
+>>> [00:56:00] Injetando 100000 mensagens (throughput máximo, acks=all)
+
+>>> [00:56:00] Curva de lag do grupo (amostra a cada ~2 s)
+    t(s)  lag_total
+       2  1
+       5  20416
+       9  4
+
+>>> [00:56:09] Resultado do kafka-producer-perf-test
+    Number of messages read: 1
+    100000 records sent, 39729.837108 records/sec (5.76 MB/sec), 1207.25 ms avg latency, 2071.00 ms max latency, 1272 ms 50th, 1923 ms 95th, 2051 ms 99th, 2071 ms 99.9th.
+    vazão de produção: 39729 msg/s | lag máximo: 20416 | tempo até lag ≈ 0: 9s
+    [PASS] perf-test concluiu sem erro (exit 0)
+    [PASS] Vazão de produção com acks=all e R=3 acima de 1000 msg/s (39729 msg/s)
+    [PASS] Lag absorvido até <= 5 mensagens em 9s
+    mensagens consumidas (offsets confirmados) durante o teste: 100018 (injetadas: 100000 + leituras dos sensores)
+    [PASS] Todas as 100000 mensagens injetadas foram consumidas (consumidas: 100018)
+    (o lag máximo amostrado depende de o consumidor acompanhar ou não a produção; é informativo, não critério)
+    [PASS] Grupo permaneceu com 3 consumidores durante a carga
+
+>>> [00:56:12] Estado final
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          33778           33780           2               consumer-a7cd003a25d8-a6e37fb9-cd78-49ab-a3ac-ae8e86bfad36 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  0          33461           33462           1               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          33259           33260           1               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+
+================================================================================
+ RESULTADO: PASS (6/6 verificações)  |  evidência: reports/logs/T4_carga.log
+================================================================================

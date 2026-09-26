@@ -1,0 +1,51 @@
+================================================================================
+ T9: CAPTURA DE PACOTES (tcpdump/Wireshark) DURANTE FALHA DE BROKER
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:54:28Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : nenhum
+================================================================================
+
+>>> [00:54:29] Preparando a imagem nicolaka/netshoot
+    [PASS] Imagem nicolaka/netshoot disponível
+
+>>> [00:54:29] Endereços IP dos brokers (rede do compose)
+    kafka-1 = 172.19.0.2
+    kafka-2 = 172.19.0.3
+    kafka-3 = 172.19.0.4
+    cliente capturado: smartfactory-producer-1 = 172.19.0.8
+
+>>> [00:54:29] Iniciando tcpdump na pilha de rede de smartfactory-producer-1
+    [PASS] Container de captura em execução
+    Alvo da falha: líder do quórum = kafka-2 (172.19.0.3)
+
+>>> [00:54:35] Executando T3 (SIGKILL no líder do quórum) durante a captura
+    T3 terminou com código 0 (evidência: reports/logs/T3_falha_broker_hard_controller.log)
+    [PASS] T3 (falha dura do controller) passou durante a captura
+
+>>> [00:55:45] Finalizando a captura
+    [PASS] Arquivo reports/pcaps/failover_broker.pcap gerado (31126 bytes)
+
+>>> [00:55:48] Análise do .pcap (contagem de pacotes por broker)
+    RESUMO DA CAPTURA: reports/pcaps/failover_broker.pcap  (31126 bytes)
+    Capturado na pilha de rede de smartfactory-producer-1 (cliente/sensor) | falha: SIGKILL em kafka-2 (172.19.0.3)
+    Gerado em 2026-09-26T00:55:54Z por scripts/capture_failover_pcap.sh
+    
+    broker     ip                   SYN->      FIN<-        RST<- pacotes c/ dados
+    kafka-1    172.19.0.2               1          0            0             44
+    kafka-2    172.19.0.3              35          1            1             34  <-- derrubado
+    kafka-3    172.19.0.4               0          0            0              0
+    
+    Legenda: SYN-> tentativas de conexão do cliente ao broker (sem resposta = broker morto); FIN<-/RST<- encerramentos enviados pelo broker.
+    O sensor capturado só fala com os líderes das partições que usa; brokers sem pacotes de dados não lideram essas partições.
+    Filtros úteis no Wireshark:  ip.addr==172.19.0.3 && (tcp.flags.fin==1 || tcp.flags.reset==1)
+                                 tcp.flags.syn==1 && tcp.flags.ack==0        (reconexões)
+                                 kafka                                       (decodifica o protocolo)
+    [PASS] Cliente reagiu à queda de kafka-2: encerramento (FIN=1, RST=1) ou tentativas de reconexão (SYN=35)
+    [PASS] Cliente manteve tráfego de dados com os brokers sobreviventes (44 pacotes PSH)
+
+================================================================================
+ RESULTADO: PASS (6/6 verificações)  |  evidência: reports/logs/T9_captura_pcap.log
+================================================================================
