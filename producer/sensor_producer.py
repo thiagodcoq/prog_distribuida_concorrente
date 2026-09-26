@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import signal
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -65,12 +66,48 @@ class SensorTelemetryProducer:
             "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
         )
         self.topic: str = os.getenv("KAFKA_TOPIC", "dados-sensores")
-        self.sensor_id: str = os.getenv("SENSOR_ID", "sensor-generico-01")
         self.sensor_setor: str = os.getenv("SENSOR_SETOR", "linha_producao")
+        # Sem SENSOR_ID explícito (ex.: réplicas de --scale), o ID é derivado do hostname
+        self.sensor_id: str = os.getenv(
+            "SENSOR_ID", f"sensor-{self.sensor_setor}-{socket.gethostname()}"
+        )
         self.intervalo_envio: float = float(os.getenv("INTERVALO_ENVIO_SEG", "2.0"))
         self.chance_anomalia: float = float(
             os.getenv("CHANCE_ANOMALIA_PERCENTUAL", "15.0")
         )
+
+        # Cliente Kafka
+        self.acks: str = os.getenv("PRODUCER_ACKS", "all")
+        self.producer_retries: int = int(os.getenv("PRODUCER_RETRIES", "5"))
+        self.request_timeout_ms: int = int(
+            os.getenv("PRODUCER_REQUEST_TIMEOUT_MS", "45000")
+        )
+        self.metadata_max_age_ms: int = int(
+            os.getenv("PRODUCER_METADATA_MAX_AGE_MS", "10000")
+        )
+        self.connect_max_retries: int = int(os.getenv("CONNECT_MAX_RETRIES", "30"))
+        self.connect_retry_delay: float = float(
+            os.getenv("CONNECT_RETRY_DELAY_SEG", "3.0")
+        )
+        self.connect_retry_max_delay: float = float(
+            os.getenv("CONNECT_RETRY_MAX_DELAY_SEG", "30.0")
+        )
+
+        # Perfil de operação nominal do setor e ruído gaussiano
+        self.temp_base: float = float(os.getenv("TEMP_BASE", "50.0"))
+        self.vib_base: float = float(os.getenv("VIB_BASE", "2.0"))
+        self.kw_base: float = float(os.getenv("KW_BASE", "15.0"))
+        self.ruido_temp: float = float(os.getenv("RUIDO_TEMPERATURA", "2.0"))
+        self.ruido_vib: float = float(os.getenv("RUIDO_VIBRACAO", "0.4"))
+        self.ruido_kw: float = float(os.getenv("RUIDO_POTENCIA_KW", "1.5"))
+
+        # Anomalias são geradas acima dos limites críticos configurados
+        self.max_temp: float = float(os.getenv("MAX_TEMP", "85.0"))
+        self.max_vibration: float = float(os.getenv("MAX_VIBRATION", "5.0"))
+        self.max_power_kw: float = float(os.getenv("MAX_POWER_KW", "30.0"))
+        self.anomalia_fator_min: float = float(os.getenv("ANOMALIA_FATOR_MIN", "1.02"))
+        self.anomalia_fator_max: float = float(os.getenv("ANOMALIA_FATOR_MAX", "1.5"))
+
         self.running: bool = True
         self.producer: KafkaProducer = None
 
@@ -104,20 +141,19 @@ class SensorTelemetryProducer:
         )
         self.running = False
 
-    def connect(self, max_retries: int = 30, retry_delay: float = 3.0) -> None:
+    def connect(self) -> None:
         """
         Estabelece a conexão com o cluster Apache Kafka com política de repetição.
 
         Caso os brokers ainda estejam em fase de inicialização ou eleição de quórum KRaft,
-        o método aguarda e tenta novamente até que o limite estipulado seja atingido.
-
-        Args:
-            max_retries (int): Número máximo de tentativas de conexão.
-            retry_delay (float): Tempo em segundos entre as tentativas.
+        o método aguarda e tenta novamente com recuo exponencial: a espera começa em
+        `connect_retry_delay`, dobra a cada falha e é limitada a `connect_retry_max_delay`,
+        até `connect_max_retries` tentativas (todos configurados por variáveis de ambiente).
 
         Raises:
             SystemExit: Caso todas as tentativas de conexão se esgotem sem sucesso.
         """
+        max_retries = self.connect_max_retries
         retries = 0
         while self.running and retries < max_retries:
             try:
@@ -131,15 +167,20 @@ class SensorTelemetryProducer:
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                     key_serializer=lambda k: k.encode("utf-8") if k else None,
-                    acks="all",  # Garante confirmação de escrita das réplicas em sincronia (ISR)
-                    retries=5,
+                    acks=self.acks,  # "all": confirmação de todas as réplicas em sincronia (ISR)
+                    retries=self.producer_retries,
                     max_in_flight_requests_per_connection=1,
-                    request_timeout_ms=15000,
+                    request_timeout_ms=self.request_timeout_ms,
+                    metadata_max_age_ms=self.metadata_max_age_ms,
                 )
                 logger.info("Conexão com cluster Kafka estabelecida com sucesso!")
                 return
             except (NoBrokersAvailable, KafkaError) as err:
                 retries += 1
+                retry_delay = min(
+                    self.connect_retry_delay * (2 ** (retries - 1)),
+                    self.connect_retry_max_delay,
+                )
                 logger.warning(
                     "Brokers indisponíveis (%s). Nova tentativa em %.1f segundos...",
                     str(err),
@@ -155,10 +196,13 @@ class SensorTelemetryProducer:
 
     def generate_telemetry_payload(self) -> Dict[str, Any]:
         """
-        Gera uma leitura de telemetria industrial com base nos padrões do setor.
+        Gera uma leitura de telemetria industrial com base no perfil do setor.
 
-        Possui lógica estocástica para injetar anomalias de temperatura, vibração
-        ou sobretensão elétrica de acordo com o percentual estipulado em `chance_anomalia`.
+        O perfil nominal (TEMP_BASE, VIB_BASE, KW_BASE) e o ruído vêm de variáveis de
+        ambiente. Possui lógica estocástica para injetar anomalias de temperatura, vibração
+        ou sobretensão elétrica de acordo com o percentual estipulado em `chance_anomalia`;
+        os valores anômalos ficam entre o limite crítico (MAX_*) multiplicado por
+        ANOMALIA_FATOR_MIN e por ANOMALIA_FATOR_MAX, acompanhando os limites configurados.
 
         Returns:
             Dict[str, Any]: Dicionário contendo os dados da telemetria:
@@ -169,44 +213,28 @@ class SensorTelemetryProducer:
                 - consumo_energia_kw (float): Potência consumida em kW.
                 - timestamp (str): Carimbo de data/hora no padrão ISO 8601 UTC.
         """
-        # Valores base de operação normal por setor
-        setor_profiles = {
-            "linha_producao": {"temp_base": 65.0, "vib_base": 2.5, "kw_base": 15.0},
-            "refrigeracao": {"temp_base": 5.0, "vib_base": 1.8, "kw_base": 22.0},
-            "empacotamento": {"temp_base": 45.0, "vib_base": 2.0, "kw_base": 12.0},
-            "fundicao": {"temp_base": 80.0, "vib_base": 3.2, "kw_base": 28.0},
-        }
-
-        profile = setor_profiles.get(
-            self.sensor_setor,
-            {"temp_base": 50.0, "vib_base": 2.0, "kw_base": 15.0},
-        )
-
         is_anomaly = random.uniform(0, 100) < self.chance_anomalia
 
+        # Operação nominal com ruído gaussiano suave
+        temp = self.temp_base + random.gauss(0, self.ruido_temp)
+        vibracao = max(0.1, self.vib_base + random.gauss(0, self.ruido_vib))
+        consumo_kw = max(1.0, self.kw_base + random.gauss(0, self.ruido_kw))
+
         if is_anomaly:
-            # Injeta valores anômalos que violam os limites operacionais
+            # Sobrescreve as grandezas afetadas com valores acima do limite crítico
             anomaly_type = random.choice(["temp", "vib", "power", "multi"])
-            temp = (
-                random.uniform(86.0, 105.0)
-                if anomaly_type in ("temp", "multi")
-                else profile["temp_base"] + random.gauss(0, 2.0)
-            )
-            vibracao = (
-                random.uniform(5.1, 8.5)
-                if anomaly_type in ("vib", "multi")
-                else profile["vib_base"] + random.gauss(0, 0.3)
-            )
-            consumo_kw = (
-                random.uniform(31.0, 48.0)
-                if anomaly_type in ("power", "multi")
-                else profile["kw_base"] + random.gauss(0, 1.0)
-            )
-        else:
-            # Operação nominal com ruído gaussiano suave
-            temp = profile["temp_base"] + random.gauss(0, 2.0)
-            vibracao = max(0.1, profile["vib_base"] + random.gauss(0, 0.4))
-            consumo_kw = max(1.0, profile["kw_base"] + random.gauss(0, 1.5))
+            if anomaly_type in ("temp", "multi"):
+                temp = self.max_temp * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
+            if anomaly_type in ("vib", "multi"):
+                vibracao = self.max_vibration * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
+            if anomaly_type in ("power", "multi"):
+                consumo_kw = self.max_power_kw * random.uniform(
+                    self.anomalia_fator_min, self.anomalia_fator_max
+                )
 
         payload: Dict[str, Any] = {
             "sensor_id": self.sensor_id,

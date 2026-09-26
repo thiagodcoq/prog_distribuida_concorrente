@@ -1,0 +1,87 @@
+================================================================================
+ T2: FALHA DE CONSUMIDOR E REBALANCEAMENTO (modo: graceful)
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:52:28Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : modo=graceful partição-alvo=1
+================================================================================
+
+>>> [00:52:28] Pré-condições
+    [PASS] 3 consumidores no grupo antes do teste
+    [PASS] Partição 1 recebe dados (end offset > 0)
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          38              38              0               consumer-a7cd003a25d8-1d6f7dcb-e344-4a83-a455-d813e1e7dbf1 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  0          21              21              0               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          21              21              0               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+    [PASS] Dono da partição 1 identificado (consumer-a7cd003a25d8 -> smartfactory-consumer-3)
+
+>>> [00:52:35] Derrubando smartfactory-consumer-3 (modo graceful)
+    00:52:36 container smartfactory-consumer-3 derrubado
+
+>>> [00:52:36] Aguardando outro consumidor assumir a partição 1 (até 90 s)
+    [PASS] Partição 1 reatribuída a consumer-5015dd5001f7 em 1s
+    Tempo até a reatribuição: 4s (session.timeout.ms = 10000 ms)
+
+>>> [00:52:39] Distribuição após o rebalanceamento
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  0          25              26              1               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  1          45              47              2               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          25              26              1               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+    [PASS] 2 consumidores restantes no grupo
+    [PASS] Consumidor derrubado não é mais dono de nenhuma partição
+    [PASS] Todas as 3 partições continuam atribuídas
+
+>>> [00:52:45] Processamento continua na partição reatribuída (offset consumido avança)
+    [PASS] CURRENT-OFFSET da partição 1 avançou de 40 para 52
+    [PASS] Lag total volta a ficar pequeno (<= 30 mensagens)
+    (lag residual em modo hard pode incluir mensagens reprocessadas: entrega at-least-once)
+
+>>> [00:52:49] Eventos do ConsumerRebalanceListener nos sobreviventes desde 2026-09-26T00:52:35Z
+    consumer-2  |  [REBALANCE EVENT - PARTITIONS REVOKED]
+    consumer-2  |  Consumidor ID      : consumer-ffdcc7717d15
+    consumer-2  |  Partições Revogadas: dados-sensores-P2
+    consumer-2  |  Quantidade         : 1
+    consumer-2  |  Timestamp          : 2026-09-26T00:52:36.520446+00:00
+    consumer-2  |  Motivo             : Reorganização de carga do Consumer Group iniciada.
+    consumer-2  | ================================================================================
+    --
+    consumer-2  |  [REBALANCE EVENT - PARTITIONS ASSIGNED]
+    consumer-2  |  Consumidor ID       : consumer-ffdcc7717d15
+    consumer-2  |  Partições Atribuídas: dados-sensores-P2
+    consumer-2  |  Total Atribuído     : 1
+    consumer-2  |  Timestamp           : 2026-09-26T00:52:36.542256+00:00
+    consumer-2  |  Status Operacional  : ATIVO (Processando dados)
+    consumer-2  | ================================================================================
+    --
+    consumer-1  |  [REBALANCE EVENT - PARTITIONS REVOKED]
+    consumer-1  |  Consumidor ID      : consumer-5015dd5001f7
+    consumer-1  |  Partições Revogadas: dados-sensores-P0
+    consumer-1  |  Quantidade         : 1
+    consumer-1  |  Timestamp          : 2026-09-26T00:52:36.531930+00:00
+    consumer-1  |  Motivo             : Reorganização de carga do Consumer Group iniciada.
+    consumer-1  | ================================================================================
+    --
+    consumer-1  |  [REBALANCE EVENT - PARTITIONS ASSIGNED]
+    consumer-1  |  Consumidor ID       : consumer-5015dd5001f7
+    consumer-1  |  Partições Atribuídas: dados-sensores-P0, dados-sensores-P1
+    consumer-1  |  Total Atribuído     : 2
+    consumer-1  |  Timestamp           : 2026-09-26T00:52:36.542492+00:00
+    consumer-1  |  Status Operacional  : ATIVO (Processando dados)
+    consumer-1  | ================================================================================
+    [PASS] Listener registrou revogação/atribuição
+
+>>> [00:52:49] Restaurando smartfactory-consumer-3 e voltando a 3 consumidores
+    [PASS] Grupo voltou a 3 consumidores com 1 partição cada em 4s
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  0          32              32              0               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  1          58              59              1               consumer-a7cd003a25d8-113e49ba-71e0-4de1-954c-2b1ed0801a82 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  2          32              32              0               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+
+================================================================================
+ RESULTADO: PASS (11/11 verificações)  |  evidência: reports/logs/T2_falha_consumidor_graceful.log
+================================================================================

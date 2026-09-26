@@ -1,270 +1,227 @@
 # Relatório Técnico: SmartFactory IoT com Apache Kafka
-**Disciplina:** Distribuição e Concorrência (PUC - 2026/1)  
-**Tema:** Balanceamento de Carga, Elasticidade e Failover com Kafka em Containers / Docker Compose  
-**Autores:** Equipe de Engenharia de Software Distribuído  
+
+**Disciplina:** Distribuição e Concorrência (PUC-Rio, 2026/1)  
+**Tema:** Balanceamento de Carga, Elasticidade e Failover com Kafka em Clusters Docker  
+**Autores:** _[PREENCHER: nomes dos integrantes do grupo]_
+
+> **Como este relatório foi produzido.** Todos os números abaixo vêm de logs gerados por scripts (`make evidence`, rodada única a partir de um ambiente limpo) e estão em [`logs/`](logs/). Nenhum log foi escrito à mão. Para regenerar: `make evidence` (~15 min). O roteiro que liga cada item do enunciado ao que foi implementado está em [`../docs/ROTEIRO_DE_EXECUCAO.md`](../docs/ROTEIRO_DE_EXECUCAO.md).
 
 ---
 
-## Sumário Executivo
-Este relatório apresenta o projeto e a implementação de uma arquitetura de mensageria distribuída baseada em **Apache Kafka (modo KRaft)** para o cenário industrial da **SmartFactory IoT**. A solução aborda a ingestão contínua de telemetria de sensores fabris, particionamento escalável, replicação com alta disponibilidade, consumo concorrente balanceado, detecção em tempo real de anomalias operacionais e resiliência a falhas de nós consumidores e brokers de infraestrutura.
+## 1. Objetivo
+
+Construir um sistema de monitoramento de sensores de uma fábrica inteligente que **tolere falhas**, **escale** conforme cresce o número de sensores e **balanceie a carga** entre processadores de dados, usando Apache Kafka em containers. Os objetivos do enunciado e onde cada um é atendido:
+
+| Objetivo do enunciado | Como foi atendido | Evidência |
+|---|---|---|
+| 1. Cluster Kafka com múltiplos brokers, tópicos com partições e replicação | 3 brokers KRaft; tópico `dados-sensores` com P=3, R=3, `min.insync.replicas=2` | `logs/T0_cluster_inicial.log` |
+| 2. Sensores como produtores em containers distintos | 4 containers (um por setor) + sensores extras escaláveis | `logs/T0_*`, `logs/T6_escala_sensores.log` |
+| 3. Múltiplos consumidores com balanceamento automático | Consumer group único com 3 réplicas | `logs/T1_balanceamento.log`, `logs/T5_elasticidade.log` |
+| 4. Simular falhas: parar broker e parar consumidor | Scripts com modos `graceful` e `hard` | `logs/T2_*`, `logs/T3_*`, `logs/T7_*` |
+| 5. Demonstrar via logs o comportamento sob carga e falhas | Logs de cada teste, curva de lag, captura de pacotes | `logs/T4_*`, `logs/T9_*`, `pcaps/` |
 
 ---
 
-## 1. Introdução e Objetivo
+## 2. Arquitetura
 
-### 1.1. O Cenário da SmartFactory
-No contexto da Indústria 4.0, equipamentos fabris modernos são monitorados em tempo real por dezenas ou centenas de sensores IoT. Falhas mecânicas, sobreaquecimento ou picos de demanda elétrica não detectados podem resultar em paradas críticas de produção (*downtime*) e perdas financeiras substanciais.
-
-O mini-mundo modelado neste trabalho contempla quatro setores industriais essenciais:
-1. **Linha de Produção (`linha_producao`):** Sensor de torno/fresadora CNC (`sensor-usinagem-01`), monitorando aquecimento e esforços mecânicos de usinagem.
-2. **Refrigeração Industrial (`refrigeracao`):** Sensor de unidade de resfriamento / chiller (`sensor-chiller-01`), controlando temperatura de fluidos e vibração de compressores.
-3. **Empacotamento e Logística (`empacotamento`):** Sensor de esteira transportadora e braço robótico (`sensor-esteira-01`), medindo vibração e consumo.
-4. **Fundição (`fundicao`):** Sensor de forno elétrico de alta potência (`sensor-forno-01`), operando sob regime de alta temperatura e alta demanda energética.
-
-### 1.2. Objetivos de Concorrência e Tolerância a Falhas
-Os principais objetivos de engenharia de software distribuído avaliados neste projeto incluem:
-- **Particionamento e Paralelismo:** Dividir o fluxo de telemetria em partições lógicas independentes ($P=3$), permitindo processamento simultâneo e ordenado por chave de partição.
-- **Replicação e Tolerância a Falhas de Infraestrutura:** Assegurar que os dados persistidos sobrevivam à queda súbita de qualquer nó broker no cluster através de replicação ativa ($R=3$, `min.insync.replicas=2`) e quórum KRaft com 3 votantes (maioria 2 de 3).
-- **Concorrência e Rebalanceamento Dinâmico:** Organizar instâncias consumidoras em um *Consumer Group* único (`smartfactory-processors`), garantindo que a carga seja distribuída de forma balanceada e que partições órfãs sejam realocadas sem interrupção de serviço em caso de queda de réplicas.
-- **Elasticidade Horizontal:** Demonstrar a capacidade de escalar para cima e para baixo a quantidade de processadores conforme a carga de trabalho.
-- **Detecção de Anomalias em Tempo Real:** Classificar desvios de operação em níveis `WARNING` e `CRITICAL` e consolidá-los em repositório estruturado compartilhado.
-
----
-
-## 2. Arquitetura da Solução
-
-### 2.1. Topologia de Rede e Fluxo de Mensagens
-A arquitetura foi implementada em containers Docker orquestrados via Docker Compose, utilizando Apache Kafka 3.7 em modo **KRaft (Kafka Raft Metadata Mode)** com 3 brokers, eliminando a dependência do Apache ZooKeeper e garantindo menor latência, quórum de metadados resiliente e alta disponibilidade.
+### 2.1 Visão geral
 
 ```
-       [ Sensor Pod 1 ]       [ Sensor Pod 2 ]       [ Sensor Pod 3 ]       [ Sensor Pod 4 ]
-       (Linha Produção)        (Refrigeração)         (Empacotamento)          (Fundição)
-              \                      |                      |                     /
-               \                     |                      |                    /
-                v                    v                      v                   v
-         =============================================================================
-                                     APACHE KAFKA CLUSTER
-             Broker 1 (9092)           Broker 2 (9094)           Broker 3 (9096)
-         -----------------------------------------------------------------------------
-                                      Tópico: dados-sensores
-                   [ Partição 0 ]            [ Partição 1 ]           [ Partição 2 ]
-                 (L: B1, Réps: B2,B3)      (L: B2, Réps: B3,B1)     (L: B3, Réps: B1,B2)
-         =============================================================================
-                                /                   |                  \
-                               /                    |                   \
-                              v                     v                    v
-                       [ Consumidor 1 ]      [ Consumidor 2 ]     [ Consumidor 3 ]
-                       \---------------------------------------------------------/
-                                 Consumer Group: "smartfactory-processors"
-                                                    |
-                                                    v
-                                    [ Alertas /var/log/smartfactory ]
+   [Sensor 1]        [Sensor 2]        [Sensor 3]        [Sensor 4]      [Sensores extras]
+  Linha Produção     Refrigeração      Empacotamento       Fundição       (escala, --scale)
+        \                 |                 |                 /
+         v                v                 v                v
+   =====================================================================
+                         APACHE KAFKA CLUSTER (KRaft)
+        Broker 1 (:9092)      Broker 2 (:9094)      Broker 3 (:9096)
+        (broker+controller)   (broker+controller)   (broker+controller)
+   ---------------------------------------------------------------------
+                       Tópico: dados-sensores
+              [Partição 0]      [Partição 1]      [Partição 2]
+        (1 líder + 2 réplicas por partição; líderes realocados em falhas)
+   =====================================================================
+                    /                |                 \
+                   v                 v                  v
+            [Consumidor A]    [Consumidor B]     [Consumidor C]
+            \---------------------------------------------------/
+                 Consumer Group: "smartfactory-processors"
+                                     |
+                                     v
+             [Alertas JSON em /var/log/smartfactory/alerts.log]
 ```
 
-### 2.2. Justificativa Técnica do Particionamento e Replicação
+Tudo roda em Docker Compose (`docker-compose.yml`) em um único host. Os componentes:
 
-#### Estratégia de Particionamento ($P = 3$)
-- **Paralelismo Máximo Efetivo:** No Apache Kafka, uma partição só pode ser atribuída a no máximo um consumidor dentro do mesmo *Consumer Group*. Com $P = 3$, o sistema suporta até 3 consumidores ativos em paralelismo total (relação 1:1).
-- **Ordenação Local por Chave:** Os produtores utilizam `key = sensor_id`. O algoritmo de hash (`murmur2`) garante que todas as leituras de um mesmo sensor sejam sistematicamente encaminhadas para a mesma partição, assegurando consistência estrita de ordem cronológica na entrega ao consumidor.
+- **Sensores** (`producer/sensor_producer.py`): geram JSON `{sensor_id, setor, temperatura, vibracao, consumo_energia_kw, timestamp}` a cada `INTERVALO_ENVIO_SEG` e o publicam com `acks=all`. Uma fração das leituras (`CHANCE_ANOMALIA_PERCENTUAL`) é anômala, sempre acima dos limites críticos configurados.
+- **Cluster Kafka**: três nós com papéis combinados broker+controller, imagem `apache/kafka:3.7.0`, com healthcheck.
+- **Consumidores** (`consumer/data_processor.py`): classificam cada leitura em `NORMAL`, `WARNING` ou `CRITICAL` conforme os limites (`WARN_*`/`MAX_*`) e gravam as anomalias como linhas JSON no arquivo de alertas (o "logger" do enunciado), num volume Docker compartilhado entre as réplicas. Um `ConsumerRebalanceListener` registra cada revogação e atribuição de partições.
 
-#### Estratégia de Replicação ($R = 3$) e Quórum KRaft com 3 Votantes
-- **Fator de Replicação ($R = 3$):** Cada mensagem gravada no líder de uma partição é replicada para todos os outros dois brokers do cluster, garantindo 3 cópias ativas dos dados em nós fisicamente independentes.
-- **`min.insync.replicas = 2`:** Garante consistência estrita sem perda de disponibilidade. Com $R=3$ e `min.insync.replicas=2`, o cluster tolera a queda de 1 broker sem perder disponibilidade de escrita para produtores configurados com `acks = all`, pois restam ainda 2 réplicas ativas em sincronia (ISR).
-- **Quórum KRaft Integrado (3 Votantes):** Todos os três nós (`kafka-1`, `kafka-2` e `kafka-3`) atuam com papéis combinados `broker,controller`, participando do quórum de consenso Raft para metadados e eleição de líderes (`KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093"`).
-- **Eliminação do Antipadrão de 2 Votantes:** Em algoritmos de consenso Raft, quórum significa maioria estrita ($\lfloor N/2 \rfloor + 1$). Com apenas 2 votantes, a maioria é 2 (100%), o que significa que a queda de 1 único broker já derrubava o quórum do controller, impedindo novas eleições de líderes e alterações de metadados. A migração para 3 votantes (maioria = 2 de 3) corrigiu esse antipadrão, alinhando a arquitetura à recomendação oficial do Apache Kafka de operar com número ímpar de controllers ($N \ge 3$) e conferindo tolerância a falhas real tanto ao plano de controle quanto ao plano de dados.
+### 2.2 Decisões de projeto e justificativas
 
-### 2.3. Especificação do Payload JSON
-O contrato de dados trafegado no tópico `dados-sensores` segue o padrão estruturado abaixo:
-
-```json
-{
-  "sensor_id": "sensor-usinagem-01",
-  "setor": "linha_producao",
-  "temperatura": 89.2,
-  "vibracao": 4.1,
-  "consumo_energia_kw": 18.5,
-  "timestamp": "2026-09-24T10:15:20.123456Z"
-}
-```
+- **P=3 partições:** até 3 consumidores trabalham em paralelo (1 partição cada); o excedente fica ocioso.
+- **R=3 e `min.insync.replicas=2`:** com `acks=all`, o sistema tolera a queda de 1 broker sem perder escritas.
+- **3 controllers KRaft:** o quórum Raft exige maioria (⌊N/2⌋+1). Com 2 votantes a queda de qualquer nó destrói o quórum; com 3 tolera-se 1 falha. É o que sustenta o failover medido no T3.
+- **Chave de partição = `sensor_id`:** preserva a ordem por sensor. Consequência descoberta nos testes: com poucas chaves, a distribuição pode ser desigual (ver §5.1).
+- **Configuração externalizada:** `config/sensor_thresholds.env` é a fonte única (limites, tópico/partições/replicação, timeouts, retries, backoff, perfil de simulação), carregada pelo compose, pelo Makefile e pelos scripts. O perfil de cada setor (`TEMP_BASE`, `VIB_BASE`, `KW_BASE`) fica nas variáveis de ambiente do `docker-compose.yml`.
+- **Ajustes de cliente que os testes exigiram:** `metadata_max_age_ms=10000` em produtores e consumidores e `request_timeout_ms=45000` nos produtores (ver §5.2).
 
 ---
 
-## 3. Documentação de Instalação e Operação
+## 3. Instalação e operação
 
-### 3.1. Pré-Requisitos de Software
-- **Docker Engine:** Versão 20.10 ou superior.
-- **Docker Compose:** Versão v2 ou superior.
-- **GNU Make:** Instalado no sistema operacional hospedeiro.
+Pré-requisitos: Docker 20.10+ com Compose v2, GNU Make e bash. Detalhes, variáveis de configuração e solução de problemas estão no [`README.md`](../README.md).
 
-### 3.2. Ciclo de Vida Automatizado via `Makefile`
-
-O `Makefile` centraliza todos os comandos operacionais sem intervenções manuais avulsas:
-
-| Comando | Descrição Operacional |
-| :--- | :--- |
-| `make build` | Compila as imagens Docker personalizadas do produtor e do consumidor. |
-| `make up` | Inicializa os 3 brokers Kafka, aguarda 10s, cria o tópico particionado e sobe todos os serviços. |
-| `make down` | Encerra os containers mantendo a integridade dos volumes persistentes. |
-| `make create-topic` | Cria explicitamente o tópico `dados-sensores` com $P=3$ e $R=3$ e exibe sua topologia. |
-| `make logs` | Conecta-se à saída em tempo real dos consumidores de telemetria. |
-| `make scale-up` | Escala o número de consumidores para 3 réplicas (1 partição por consumidor). |
-| `make scale-down` | Reduz os consumidores para 1 réplica (absorve as 3 partições). |
-| `make test-consumer-fail` | Executa o teste automatizado de rebalanceamento por queda de consumidor. |
-| `make test-broker-fail` | Executa o teste de resiliência e failover com derrubada do broker líder. |
-| `make health` | Gera diagnóstico completo do cluster, tópicos, consumer group e alertas. |
-| `make clean` | Para todos os containers e remove os volumes temporários. |
-
----
-
-## 4. Testes de Falha e Elasticidade (Evidências Práticas)
-
-Os quatro experimentos a seguir foram executados e tiveram seus logs capturados no diretório `reports/logs/`.
-
-### 4.1. Teste 1: Balanceamento Inicial de Partições
-- **Cenário:** Tópico com 3 partições e 3 instâncias de consumidores registradas no grupo `smartfactory-processors`.
-- **Resultado Observado:** O Kafka Coordinator efetuou a divisão perfeita 1:1 das partições entre os 3 membros.
-
-```text
-GROUP                   TOPIC          PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID      CLIENT-ID
-smartfactory-processors dados-sensores 0          152             152             0    consumer-1-...   consumer-1
-smartfactory-processors dados-sensores 1          148             148             0    consumer-2-...   consumer-2
-smartfactory-processors dados-sensores 2          155             155             0    consumer-3-...   consumer-3
+```bash
+make build     # imagens do produtor e do consumidor
+make up        # 3 brokers (aguarda healthcheck), cria o tópico, sobe sensores e consumidores
+make logs      # processamento dos consumidores em tempo real
+make health    # diagnóstico do cluster
+make evidence  # clean + up + toda a suíte de testes (regenera reports/logs)
 ```
 
-**Log do ConsumerRebalanceListener:**
-```text
-================================================================================
- [REBALANCE EVENT - PARTITIONS ASSIGNED]
- Consumidor ID       : consumer-1
- Partições Atribuídas: dados-sensores-P0
- Total Atribuído     : 1
- Timestamp           : 2026-09-24T10:15:29.412850Z
- Status Operacional  : ATIVO (Processando dados)
-================================================================================
-```
+Escala manual: `make scale-consumers N=5`, `make scale-sensors N=8`. Cada teste tem um alvo próprio (`make help` lista todos).
 
 ---
 
-### 4.2. Teste 2: Falha de Consumidor e Rebalanceamento Automático
-- **Cenário:** Queda forçada do container `smartfactory-consumer-3` (`docker stop smartfactory-consumer-3`).
-- **Comportamento Observado:**
-  1. A ausência de *heartbeats* fez o coordenador detectar a saída do consumidor.
-  2. O `SmartFactoryRebalanceListener` registrou o disparo de `on_partitions_revoked` nos nós remanescentes.
-  3. Em seguida, `on_partitions_assigned` foi executado: o `consumer-1` assumiu a partição órfã (P2), passando a processar P0 e P2 simultaneamente, enquanto o `consumer-2` permaneceu com P1.
-  4. Nenhuma mensagem foi perdida e o fluxo de telemetria continuou estável.
+## 4. Metodologia dos testes
 
-**Log do Rebalanceamento no Consumidor 1:**
-```text
-================================================================================
- [REBALANCE EVENT - PARTITIONS ASSIGNED]
- Consumidor ID       : consumer-1
- Partições Atribuídas: dados-sensores-P0, dados-sensores-P2
- Total Atribuído     : 2
- Timestamp           : 2026-09-24T10:20:25.210450Z
- Status Operacional  : ATIVO (Processando dados)
-================================================================================
-```
+- Cada teste é um script em `scripts/` com **asserções**: termina com código ≠ 0 se alguma falhar e grava seu log em `reports/logs/` com data, commit e argumentos no cabeçalho.
+- Os testes de falha têm dois modos: **`graceful`** (`docker stop`, o processo recebe SIGTERM e sai do grupo avisando) e **`hard`** (`docker kill`, SIGKILL: queda abrupta). No modo `hard`, o script desativa a política de restart do container antes de matá-lo (senão o Docker o religaria sozinho) e a restaura depois.
+- Comandos Kafka (`kafka-topics.sh`, `kafka-consumer-groups.sh`, `kafka-metadata-quorum.sh`, `kafka-get-offsets.sh`, `kafka-producer-perf-test.sh`) são executados dentro de um broker vivo.
+- Ambiente: macOS, Docker Desktop, um único host (todos os "nós" compartilham a máquina).
+- Rodada de referência: `make evidence` de 26/09/2026 (horário UTC dos logs). Resultado consolidado em [`logs/RESULTADO_TESTES.txt`](logs/RESULTADO_TESTES.txt): **12 de 12 testes PASS**.
 
 ---
 
-### 4.3. Teste 3: Falha de Broker Kafka (Alta Disponibilidade com 3 Brokers)
-- **Cenário:** O cluster operava com 3 brokers ativos. O broker `kafka-1` (líder da Partição 0) foi deliberadamente derrubado (`docker stop smartfactory-kafka-1`).
-- **Comportamento Observado:**
-  1. O quórum KRaft detectou a parada de `kafka-1`. Como o quórum de controllers possui 3 votantes, os nós sobreviventes (`kafka-2` e `kafka-3`) mantiveram maioria estrita ativa (2 de 3), preservando a integridade do quórum de metadados sem interrupção.
-  2. Um dos brokers remanescentes no ISR (`kafka-2`) foi promovido a novo Líder da Partição 0 em milissegundos.
-  3. Com `min.insync.replicas = 2` e 2 réplicas restantes em sincronia (`Isr: 2,3`), os produtores continuaram enviando telemetria com `acks=all` sem falhas.
-  4. Os clientes (produtores e consumidores) reconectaram através da lista de bootstrap (`kafka-1:9092,kafka-2:9092,kafka-3:9092`), atualizando os metadados dinamicamente.
-  5. Após a reinicialização do nó (`docker start smartfactory-kafka-1`), o broker sincronizou os logs pendentes e reintegrou o ISR de todas as partições (`Isr: 2,3,1`).
+## 5. Resultados
 
-```text
-# Estado durante a falha (Broker 1 parado; quórum de metadados e escritas mantidos por Broker 2 e 3):
-Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2,3  Isr: 2,3
-Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3
-Topic: dados-sensores  Partition: 2  Leader: 3  Replicas: 3,1,2  Isr: 3,2
+### 5.1 T0 e T1: cluster e balanceamento (`logs/T0_cluster_inicial.log`, `logs/T1_balanceamento.log`)
 
-# Estado após recuperação (ISRs restauradas com os 3 brokers sincronizados):
-Topic: dados-sensores  Partition: 0  Leader: 2  Replicas: 1,2,3  Isr: 2,3,1
-Topic: dados-sensores  Partition: 1  Leader: 2  Replicas: 2,3,1  Isr: 2,3,1
-Topic: dados-sensores  Partition: 2  Leader: 3  Replicas: 3,1,2  Isr: 3,2,1
-```
+- 3 brokers `healthy`; quórum com `CurrentVoters: [1,2,3]`; tópico com `PartitionCount: 3`, `ReplicationFactor: 3`, `min.insync.replicas=2`; ISR completo; liderança distribuída entre brokers.
+- Consumer group: 3 membros, **1 partição por consumidor**, nenhum ocioso; o listener registrou as atribuições (`PARTITIONS ASSIGNED`).
+- **Sensores por partição** (chave `sensor_id`, particionador murmur2): P0 ← `sensor-usinagem-01`; P1 ← `sensor-esteira-01` e `sensor-forno-01`; P2 ← `sensor-chiller-02`.
+
+> **Problema encontrado e corrigido.** Com o ID original `sensor-chiller-01`, os sensores de refrigeração, empacotamento e fundição caíam todos na P1 e **a P2 nunca recebia dados** (offset 0), de modo que um dos três consumidores ficava sem trabalho e o "balanceamento" existia só na atribuição. Calculamos o hash murmur2 e trocamos o ID para `sensor-chiller-02` (P2). O T0 agora **exige** que as 3 partições recebam mensagens.
+
+### 5.2 T2 e T3: falhas de consumidor e de broker
+
+**T2: queda de consumidor** (`logs/T2_falha_consumidor_graceful.log`, `logs/T2_falha_consumidor_hard.log`). O teste derruba o consumidor dono de uma partição **com tráfego** (P1):
+
+| Modo | Detecção | Tempo até outro consumidor assumir a P1 | Processamento |
+|---|---|---|---|
+| `graceful` (SIGTERM) | O consumidor avisa que sai (LeaveGroup) | **4 s** | offset da P1 avançou de 40 para 52; grupo voltou a 3 (1:1) em 4 s |
+| `hard` (SIGKILL) | Ausência de heartbeats por `session.timeout.ms` (10 s) | **13 s** | offset da P1 avançou de 63 para 83; grupo voltou a 3 (1:1) em 8 s |
+
+A diferença entre os dois tempos é a evidência de que o `hard` realmente exercita a detecção por heartbeat. Em ambos, os banners `PARTITIONS REVOKED/ASSIGNED` dos sobreviventes estão nos logs.
+
+**T3: queda de broker** (`logs/T3_falha_broker_graceful_follower.log`, `logs/T3_falha_broker_hard_controller.log`). Durante a queda, um `kafka-producer-perf-test` (1500 mensagens a 50/s, `acks=all`, produtor idempotente) escreve num tópico exclusivo; o script compara o delta dos offsets com o número de mensagens enviadas.
+
+| | Follower, `graceful` (kafka-1) | Líder do quórum, `hard` (kafka-2) |
+|---|---|---|
+| Líderes de partição realocados em | 3 s | 21 s |
+| ISR | 3 → 2 réplicas (≥ `min.insync.replicas`) | 3 → 2 réplicas |
+| Quórum KRaft | líder mantido (2), epoch 1 | **nova eleição**: líder 2 → 1, epoch 1 → 3 |
+| Sensores gravando durante a falha | sim (239 → 268 mensagens) | sim (354 → 418) |
+| Lotes de sensores descartados | 0 | 0 |
+| **Delta de offsets vs. enviadas** | **1500 = 1500** | **1500 = 1500** |
+| ISR restaurado após religar | 8 s | 7 s |
+
+Ou seja, **nenhuma mensagem foi perdida nem duplicada** na escrita idempotente com `acks=all`. Com o líder do quórum morto, a latência máxima do produtor foi de 12,7 s (ele espera o failover e conclui).
+
+> **Problema encontrado e corrigido.** Na primeira execução do T3 em modo `hard` contra o líder do quórum, os produtores Python dos sensores **descartavam lotes** (`KafkaTimeoutError: Batch ... containing 8 record(s)`) e os consumidores **ficavam sem consumir**; tudo só se recuperava quando o broker voltava. A causa: durante a eleição do novo controlador, o cliente obtinha metadados ainda apontando para o líder morto e não os renovava (`metadata_max_age_ms` padrão de 5 min), e o `request_timeout_ms` de 15 s expirava os lotes antes do failover terminar (13 a 26 s nas medições). Corrigimos com `metadata_max_age_ms=10000` (produtor e consumidor) e `request_timeout_ms=45000` (produtor), ambos externalizados. Depois disso, 0 lotes foram descartados. O `docker stop` do T3 em modo `graceful` **não** reproduzia o problema, o que mostra o valor do modo `hard`.
+
+### 5.3 T4: comportamento sob carga (`logs/T4_carga.log`)
+
+100 mil mensagens JSON via `kafka-producer-perf-test` (`acks=all`, R=3), throughput máximo:
+
+- Vazão de produção: **39.729 msg/s** (5,76 MB/s), latência média 1,2 s (máx. 2,1 s).
+- O lag do grupo chegou a **20.416** mensagens na amostragem e foi absorvido até ≤ 5 em **9 s**; as 3 réplicas permaneceram no grupo.
+- Todas as mensagens foram consumidas (offsets confirmados: 100.018 = 100.000 injetadas + leituras dos sensores).
+
+Observação: o pico de lag depende de o consumidor acompanhar ou não a produção e do instante da amostragem (em outra rodada o pico amostrado foi 4), por isso ele é informativo. O critério do teste é a absorção completa.
+
+### 5.4 T5 e T6: elasticidade e escala de sensores
+
+**T5: consumidores** (`logs/T5_elasticidade.log`). Com um custo simulado de 20 ms por mensagem (`PROCESSING_DELAY_MS`), o **mesmo lote de 3000 mensagens** (distribuído em round-robin) é esvaziado com 1 a 5 consumidores:
+
+| Consumidores | Tempo para esvaziar | Vazão | Observação |
+|:---:|:---:|:---:|---|
+| 1 | 72 s | ~41 msg/s | 1 consumidor lê as 3 partições |
+| 2 | 49 s | ~61 msg/s | um consumidor fica com 2 partições (gargalo) |
+| 3 | 29 s | ~103 msg/s | 1 partição por consumidor: paralelismo máximo |
+| 4 | 29 s | ~103 msg/s | 1 consumidor **ocioso** (`#PARTITIONS=0`) |
+| 5 | 25 s | ~120 msg/s | 2 consumidores **ociosos** |
+
+De 1 para 3 consumidores o tempo cai ~2,5×. Acima de 3 não há ganho relevante (29 s e 25 s ficam dentro do ruído de medição de ~2 s por consulta ao grupo): o número de partições limita o paralelismo, e os excedentes atuam como reserva (*hot standby*).
+
+**T6: sensores** (`logs/T6_escala_sensores.log`). Mensagens que chegam ao tópico em janelas de 20 s: 4 sensores → **41**; +4 extras → **79**; +8 extras → **124** (≈ 2, 4 e 6 msg/s), com **as 3 partições recebendo dados** em todos os degraus e os consumidores sem lag acumulado (≤ 30). Os sensores extras são réplicas da mesma imagem, com `SENSOR_ID` derivado do hostname.
+
+### 5.5 T7: limite de tolerância (`logs/T7_dois_brokers_fora.log`)
+
+Com 2 dos 3 brokers derrubados (SIGKILL) não há quórum KRaft nem ISR suficiente:
+
+- Uma escrita `acks=all` foi **rejeitada** (0 de 20 registros confirmados; `TimeoutException: Expiring 20 record(s)`), o que é o comportamento desejado: o sistema prefere ficar indisponível a aceitar escritas sem a garantia de replicação.
+- Os produtores e consumidores **não caíram** durante a indisponibilidade.
+- Após religar os brokers: ISR completo em 2 s, escrita `acks=all` funcionando (20 de 20), sensores voltaram a gravar, 3 consumidores no grupo e lag ≤ 30.
+
+Neste teste os sensores Python descartaram **64 lotes** durante a indisponibilidade, que passou de 60 s (limite: o buffer só retém dados por `request.timeout.ms`). Esse número variou entre execuções (23, 0, 65 e 64 nas quatro que fizemos), então é apenas indicativo.
+
+### 5.6 T8: persistência dos alertas (`logs/T8_persistencia_alertas.log`)
+
+O arquivo de alertas é visto por igual pelas 3 réplicas (230 linhas cada), tem 211 alertas `CRITICAL` e 19 `WARNING` e foi gravado por 11 `consumer_id` distintos ao longo da suíte. Após `docker compose restart consumer` ele **não foi truncado** (230 → 232 linhas) e continuou recebendo alertas (233).
+
+### 5.7 T9: captura de pacotes (Wireshark) (`logs/T9_captura_pcap.log`, `logs/T9_wireshark_resumo.txt`, `pcaps/failover_broker.pcap`)
+
+Um container `nicolaka/netshoot` compartilha a rede do produtor `smartfactory-producer-1` e grava com `tcpdump` o tráfego TCP da porta 9092 (31 KB) enquanto o T3 derruba o líder do quórum (kafka-2, 172.19.0.3):
+
+| Broker | SYN enviados pelo cliente | FIN recebidos | RST recebidos | Pacotes com dados |
+|---|:---:|:---:|:---:|:---:|
+| kafka-1 | 1 | 0 | 0 | 44 |
+| **kafka-2 (derrubado)** | **35** | **1** | **1** | 34 |
+| kafka-3 | 0 | 0 | 0 | 0 |
+
+O broker derrubado encerra a conexão (FIN e RST) e o cliente faz **35 tentativas de reconexão** a ele (sem resposta) enquanto mantém o tráfego de dados com o sobrevivente. O kafka-3 não tem pacotes de dados porque o sensor capturado só conversa com os líderes das partições que usa. Filtros úteis no Wireshark: `kafka`, `ip.addr==172.19.0.3 && (tcp.flags.fin==1 || tcp.flags.reset==1)` e `tcp.flags.syn==1 && tcp.flags.ack==0`.
+
+### 5.8 T10: regras de severidade (`make unit-test`)
+
+5 testes unitários das regras `NORMAL`/`WARNING`/`CRITICAL` nos limites exatos (inclusivos), executados na imagem do consumidor; todos passam.
 
 ---
 
-### 4.4. Teste 4: Elasticidade e Comportamento Acima do Limite de Partições
-- **Cenário:** O grupo foi escalonado dinamicamente para 4 réplicas (`docker compose up -d --scale consumer=4`) em um tópico de apenas 3 partições.
-- **Resultado Observado:** Como uma partição só pode ser consumida por um único membro do grupo ao mesmo tempo, o 4º consumidor entrou em modo **OCIOSO / STANDBY**.
+## 6. O que funcionou e o que não funcionou
 
-```text
-GROUP                   TOPIC          PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID      CLIENT-ID
-smartfactory-processors dados-sensores 0          780             780             0    consumer-1-...   consumer-1
-smartfactory-processors dados-sensores 1          775             775             0    consumer-2-...   consumer-2
-smartfactory-processors dados-sensores 2          790             790             0    consumer-3-...   consumer-3
-smartfactory-processors -              -          -               -               -    consumer-4-...   consumer-4
-```
+### 6.1 Funcionou
+- Cluster de 3 brokers KRaft sem ZooKeeper, com failover de líderes e do quórum, sem perda de mensagens na escrita idempotente com `acks=all`.
+- Rebalanceamento automático de consumidores e elasticidade até o limite do número de partições.
+- Escala de sensores sem alterar código, e alertas persistentes e compartilhados.
+- Automação completa por `Makefile`, com testes que falham de verdade e evidências regeneráveis.
 
-**Log do 4º Consumidor Ocioso:**
-```text
-================================================================================
- [REBALANCE EVENT - PARTITIONS ASSIGNED]
- Consumidor ID       : consumer-4
- Partições Atribuídas: Nenhuma (Ocioso/Standby)
- Total Atribuído     : 0
- Timestamp           : 2026-09-24T10:30:09.612450Z
- Status Operacional  : OCIOSO (Standby - Mais réplicas que partições)
-================================================================================
-```
+### 6.2 O que não funcionou de início (encontrado pelos testes e corrigido)
+1. **Partição 2 sem dados** por causa da distribuição das chaves (§5.1). Só percebemos ao inspecionar os offsets por partição.
+2. **Produtores e consumidores travados após a queda abrupta do líder do quórum** (§5.2). O `docker stop` não revelava isso; foi o SIGKILL que expôs.
+3. **`make build` falhava**: os 4 serviços de sensor tentavam construir a mesma tag de imagem. Passou a existir um único serviço de build.
+4. **Regime nominal do forno acima dos limites de aviso** (80 °C e 28 kW contra limites de 75 °C e 25 kW): gerava alerta a cada leitura. O perfil da fundição foi reajustado para 70 °C e 22 kW.
+5. **Medições instáveis nos próprios testes**: o `perf-test` devolve exit 0 mesmo quando todos os envios expiram (passamos a validar a contagem de registros enviados); o T5 media a partida da JVM junto com o esvaziamento; o T4 dependia do pico de lag amostrado. Todos foram corrigidos para critérios factuais.
+6. **Nomes das réplicas**: o Compose não reaproveita os números ao escalar (`consumer-8`, `-9`, `-10`); os scripts descobrem os containers dinamicamente.
 
-#### Tabela Comparativa de Comportamento sob Escala
-
-| Número de Consumidores | Partições por Consumidor | Taxa de Ocupação | Status do Grupo |
-| :---: | :---: | :---: | :--- |
-| **1 Consumidor** | P0, P1, P2 (3 partições) | 100% Ativo | Sem paralelismo; maior latência sob carga alta. |
-| **2 Consumidores** | C1: P0, P2 \| C2: P1 | 100% Ativo | Carga assimétrica (relação 2:1). |
-| **3 Consumidores** | C1: P0 \| C2: P1 \| C3: P2 | 100% Ativo | **Ponto ótimo de equilíbrio e paralelismo pleno.** |
-| **4 Consumidores** | C1: P0 \| C2: P1 \| C3: P2 \| C4: Ocioso | 75% Ativo | C4 atua como reserva quente (*hot standby*). |
+### 6.3 Limitações que permanecem
+- **Tolerância de exatamente 1 broker.** Com 2 de 3 fora não há quórum, e as escritas `acks=all` são rejeitadas (T7). É uma escolha consciente de consistência sobre disponibilidade.
+- **Falha simulada em um único host.** Todos os containers compartilham a máquina e o Docker; não testamos partição de rede real, latência entre nós nem falha de disco.
+- **Entrega *at-least-once* nos consumidores** (commit automático a cada 2 s): após queda abrupta, mensagens podem ser reprocessadas. Não há *exactly-once*.
+- **Perda possível de telemetria dos sensores em indisponibilidade prolongada** (§5.5): o produtor Python só retém lotes por `request.timeout.ms`.
+- **Cliente `kafka-python-ng`** (mantido pela comunidade): sob queda de broker registra muitos avisos `DNS lookup failed` (o Docker remove o nome do container parado). Um cliente Java teria comportamento mais robusto, mas o enunciado admite Python.
+- **Escala do custo de processamento simulada** (`PROCESSING_DELAY_MS`): a elasticidade do T5 é medida com custo artificial por mensagem, pois o processamento real é trivial.
+- **Distribuição por chave depende do conjunto de sensores.** Trocar os IDs pode deixar uma partição vazia; o `make test-balance` detecta isso.
+- **Resultados variam entre execuções** (por exemplo a duração da eleição do controlador, 13 a 26 s, e os lotes descartados no T7). Os números acima são os da rodada de referência.
 
 ---
 
-## 5. Análise Crítica: O que Funcionou e o que Não Funcionou
+## 7. Conclusão
 
-### 5.1. O que Funcionou com Pleno Sucesso
-1. **KRaft Mode sem ZooKeeper:** O cluster Kafka 3.7 iniciou rapidamente com footprint reduzido de memória e sem a fragilidade operacional do ZooKeeper.
-2. **RebalanceListener Estruturado:** Os callbacks `on_partitions_revoked` e `on_partitions_assigned` capturaram com clareza o ciclo de vida das partições, fornecendo visibilidade direta nos logs.
-3. **Resiliência Transparente nos Clientes:** A especificação dos três nós na lista `KAFKA_BOOTSTRAP_SERVERS` (`kafka-1:9092,kafka-2:9092,kafka-3:9092`) permitiu que tanto produtores quanto consumidores reconectassem seus sockets aos brokers sobreviventes sem falhas irreversíveis.
-4. **Volume Compartilhado de Alertas:** A gravação atômica em `/var/log/smartfactory/alerts.log` manteve o histórico consolidado de anomalias mesmo durante restarts de pods.
-
-### 5.2. Desafios Enfrentados e Soluções Adotadas
-1. **Temporização do Quórum KRaft na Inicialização:**
-   - *Problema:* Em clusters multi-broker KRaft, os brokers precisam de alguns segundos para negociar o `CLUSTER_ID` e eleger o Metadata Quorum Leader antes de responder ao comando `kafka-topics.sh`.
-   - *Solução:* Foi adicionada uma pausa de estabilização de 10 segundos no alvo `make up` e uma rotina de retry com backoff exponencial nos scripts Python.
-2. **Janela de Detecção de Queda de Consumidor (`session.timeout.ms`):**
-   - *Problema:* Com o valor padrão de 45 segundos, a detecção de queda forçada demorava excessivamente para testes rápidos.
-   - *Solução:* Ajustou-se `session_timeout_ms = 10000` (10s) e `heartbeat_interval_ms = 3000` (3s), tornando a percepção de falha ágil sem gerar falso-positivos em rede local.
-3. **Quórum KRaft e Migração de 2 para 3 Votantes:**
-   - *Análise Teórica e Solução Implementada:* Em teoria de consenso distribuído (Raft), um quórum de $N$ votantes requer $\lfloor N/2 \rfloor + 1$ votos para constituir a maioria estrita. Com $N=2$, a maioria exigida é 2, o que implicava que a queda de qualquer um dos nós destruía o quórum de metadados do controller. Para sanar esse antipadrão e garantir tolerância a falhas real, a topologia foi migrada para $N=3$ votantes (`kafka-1`, `kafka-2` e `kafka-3`). Com 3 nós, a maioria necessária é de 2 nós ativos (maioria 2 de 3). Isso assegura tolerância a falhas completa: mesmo com a queda de 1 broker, o cluster mantém tanto o plano de controle (KRaft Controller Quorum operacional para novas eleições e metadados) quanto o plano de dados ($R=3$, `min.insync.replicas=2` garantindo quórum de escrita para `acks=all`), alinhando-se estritamente às boas práticas do Apache Kafka em ambientes de missão crítica.
+O sistema atende aos objetivos do enunciado: cluster multi-broker com partições e replicação, sensores e consumidores em containers, balanceamento e rebalanceamento automáticos, falha de broker e de consumidor com o sistema continuando, e demonstração via logs sob carga e falhas. O valor maior do trabalho está nos testes de falha "duros": eles revelaram dois problemas reais (partição sem dados e clientes presos a metadados desatualizados) que o `docker stop` simples e a inspeção superficial não mostravam, e ambos foram corrigidos e verificados. As limitações listadas em §6.3 delimitam o que **não** foi demonstrado.
 
 ---
 
-## 6. Conclusão
+## 8. Apêndice: perguntas para a arguição
 
-O projeto atingiu com êxito todos os objetivos propostos na disciplina de Distribuição e Concorrência. A arquitetura implementada demonstrou como conceitos fundamentais de sistemas distribuídos — como particionamento de streams, grupos de consenso, replicação de logs e detecção de falhas por batimentos cardíacos (*heartbeats*) — operam na prática industrial com Apache Kafka.
-
-A automação integral via `Makefile`, o código limpo com documentação completa em DocStrings e a externalização de configurações tornam o sistema robusto, manutenível e preparado para apresentação e avaliação técnica.
-
----
-
-## 7. Apêndice: Preparação para a Arguição Oral da Banca
-
-Para consulta rápida durante a defesa oral do trabalho, sintetizam-se as respostas-chave para os tópicos obrigatórios:
-
-1. **"Qual a diferença entre o número de partições e o fator de replicação?"**  
-   *Resposta:* O **número de partições** define o grau de concorrência e throughput (paralelismo de processamento entre consumidores), dividindo logicamente o fluxo de dados. O **fator de replicação** define a tolerância física a falhas e a alta disponibilidade, copiando os dados da partição entre nós brokers distintos.
-
-2. **"O que acontece se tivermos 5 consumidores no mesmo grupo para um tópico com 3 partições?"**  
-   *Resposta:* 3 consumidores processarão exatamente uma partição cada. Os 2 consumidores excedentes permanecerão em espera ociosa (*hot standby*), assumindo o processamento automaticamente caso qualquer um dos consumidores ativos sofra falha.
-
-3. **"O que é uma réplica ISR (In-Sync Replica) no Kafka?"**  
-   *Resposta:* É o conjunto de réplicas que estão totalmente sincronizadas com o líder da partição dentro da janela de tempo estipulada (`replica.lag.time.max.ms`). Apenas membros da lista ISR são elegíveis para promoção a novo líder em caso de falha do nó primário.
-
-4. **"Como o consumidor sabe que outro consumidor caiu?"**  
-   *Resposta:* O Group Coordinator (broker responsável pelo gerenciamento do grupo) monitora o envio periódico de *heartbeats* de cada consumidor. Se uma instância deixar de enviar heartbeats dentro do intervalo `session.timeout.ms`, o coordenador a declara inoperante e dispara um evento de rebalanceamento para os membros restantes.
+O roteiro com respostas apoiadas em evidências está na Parte 6 de [`../docs/ROTEIRO_DE_EXECUCAO.md`](../docs/ROTEIRO_DE_EXECUCAO.md) (partições × replicação, 5 consumidores para 3 partições, ISR, detecção de queda de consumidor, por que 3 controllers, perda de mensagens, semântica de entrega).

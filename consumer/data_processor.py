@@ -169,6 +169,32 @@ class SmartFactoryConsumer:
             "ALERT_LOG_PATH", "/var/log/smartfactory/alerts.log"
         )
 
+        # Parâmetros do cliente Kafka (detecção de falha, commit e polling)
+        self.auto_offset_reset: str = os.getenv("AUTO_OFFSET_RESET", "earliest")
+        self.auto_commit_interval_ms: int = int(
+            os.getenv("AUTO_COMMIT_INTERVAL_MS", "2000")
+        )
+        self.session_timeout_ms: int = int(os.getenv("SESSION_TIMEOUT_MS", "10000"))
+        self.heartbeat_interval_ms: int = int(os.getenv("HEARTBEAT_INTERVAL_MS", "3000"))
+        self.max_poll_interval_ms: int = int(os.getenv("MAX_POLL_INTERVAL_MS", "300000"))
+        self.metadata_max_age_ms: int = int(
+            os.getenv("CONSUMER_METADATA_MAX_AGE_MS", "10000")
+        )
+        self.poll_timeout_ms: int = int(os.getenv("POLL_TIMEOUT_MS", "1000"))
+        self.poll_max_records: int = int(os.getenv("POLL_MAX_RECORDS", "50"))
+        self.processing_delay_seg: float = (
+            float(os.getenv("PROCESSING_DELAY_MS", "0")) / 1000.0
+        )
+
+        # Reconexão com recuo exponencial limitado
+        self.connect_max_retries: int = int(os.getenv("CONNECT_MAX_RETRIES", "30"))
+        self.connect_retry_delay: float = float(
+            os.getenv("CONNECT_RETRY_DELAY_SEG", "3.0")
+        )
+        self.connect_retry_max_delay: float = float(
+            os.getenv("CONNECT_RETRY_MAX_DELAY_SEG", "30.0")
+        )
+
         self.running: bool = True
         self.consumer: Optional[KafkaConsumer] = None
 
@@ -213,17 +239,18 @@ class SmartFactoryConsumer:
         )
         self.running = False
 
-    def connect(self, max_retries: int = 30, retry_delay: float = 3.0) -> None:
+    def connect(self) -> None:
         """
         Conecta ao cluster Apache Kafka com assinatura no tópico e registro do listener.
 
-        Args:
-            max_retries (int): Número máximo de tentativas de conexão.
-            retry_delay (float): Intervalo em segundos entre cada tentativa.
+        Em caso de falha, a espera entre tentativas começa em `connect_retry_delay`, dobra
+        a cada erro e é limitada a `connect_retry_max_delay` (recuo exponencial), até
+        `connect_max_retries` tentativas.
 
         Raises:
             SystemExit: Se o cluster estiver inacessível após todas as tentativas.
         """
+        max_retries = self.connect_max_retries
         retries = 0
         rebalance_listener = SmartFactoryRebalanceListener(self.consumer_id)
 
@@ -247,13 +274,14 @@ class SmartFactoryConsumer:
                     bootstrap_servers=self.bootstrap_servers.split(","),
                     group_id=self.group_id,
                     client_id=self.consumer_id,
-                    auto_offset_reset="earliest",
+                    auto_offset_reset=self.auto_offset_reset,
                     enable_auto_commit=True,
-                    auto_commit_interval_ms=2000,
+                    auto_commit_interval_ms=self.auto_commit_interval_ms,
                     value_deserializer=_safe_deserialize,
-                    session_timeout_ms=10000,
-                    heartbeat_interval_ms=3000,
-                    max_poll_interval_ms=300000,
+                    session_timeout_ms=self.session_timeout_ms,
+                    heartbeat_interval_ms=self.heartbeat_interval_ms,
+                    max_poll_interval_ms=self.max_poll_interval_ms,
+                    metadata_max_age_ms=self.metadata_max_age_ms,
                 )
 
                 # Assina o tópico passando o listener de rebalanceamento
@@ -262,6 +290,10 @@ class SmartFactoryConsumer:
                 return
             except (NoBrokersAvailable, KafkaError) as err:
                 retries += 1
+                retry_delay = min(
+                    self.connect_retry_delay * (2 ** (retries - 1)),
+                    self.connect_retry_max_delay,
+                )
                 logger.warning(
                     "Falha ao conectar aos brokers (%s). Tentando novamente em %.1f segundos...",
                     str(err),
@@ -374,7 +406,9 @@ class SmartFactoryConsumer:
         try:
             while self.running:
                 # Polling periódico com timeout curto para manter resposta a sinais de parada
-                records = self.consumer.poll(timeout_ms=1000, max_records=50)
+                records = self.consumer.poll(
+                    timeout_ms=self.poll_timeout_ms, max_records=self.poll_max_records
+                )
 
                 if not records:
                     continue
@@ -386,6 +420,9 @@ class SmartFactoryConsumer:
                             if not isinstance(payload, dict):
                                 # Mensagem não estruturada ou de benchmark - descartada graciosamente
                                 continue
+
+                            if self.processing_delay_seg > 0:
+                                time.sleep(self.processing_delay_seg)
 
                             severity, reasons = self.evaluate_telemetry(payload)
 

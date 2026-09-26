@@ -1,0 +1,78 @@
+================================================================================
+ T5: ELASTICIDADE DE CONSUMIDORES (1 a 5 réplicas, 20 ms/msg)
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:56:13Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : PROCESSING_DELAY_MS=20 lote=3000
+================================================================================
+
+>>> [00:56:13] Degrau: 1 consumidor(es)
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-64dfaf0ab63f-cd78db37-9e20-44c2-b49f-79174bcdc5e8 /172.19.0.6     consumer-64dfaf0ab63f 3               
+    [PASS] Grupo com 1 membro(s)
+    [PASS] Consumidores ociosos = 0 (obtido: 0)
+    lote de 3000 mensagens esvaziado em 72s (~41 msg/s)
+
+>>> [00:57:38] Degrau: 2 consumidor(es)
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-c13150e881c0-d58e27ed-20f2-4169-8bf0-2d5858b0adf3 /172.19.0.10    consumer-c13150e881c0 1               
+    smartfactory-processors consumer-64dfaf0ab63f-cd78db37-9e20-44c2-b49f-79174bcdc5e8 /172.19.0.6     consumer-64dfaf0ab63f 2               
+    [PASS] Grupo com 2 membro(s)
+    [PASS] Consumidores ociosos = 0 (obtido: 0)
+    lote de 3000 mensagens esvaziado em 49s (~61 msg/s)
+
+>>> [00:58:36] Degrau: 3 consumidor(es)
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-c13150e881c0-d58e27ed-20f2-4169-8bf0-2d5858b0adf3 /172.19.0.10    consumer-c13150e881c0 1               
+    smartfactory-processors consumer-0f98f48425dd-855156eb-3ef8-4bce-a36b-ee3c4a6da74a /172.19.0.11    consumer-0f98f48425dd 1               
+    smartfactory-processors consumer-64dfaf0ab63f-cd78db37-9e20-44c2-b49f-79174bcdc5e8 /172.19.0.6     consumer-64dfaf0ab63f 1               
+    [PASS] Grupo com 3 membro(s)
+    [PASS] Consumidores ociosos = 0 (obtido: 0)
+    lote de 3000 mensagens esvaziado em 29s (~103 msg/s)
+
+>>> [00:59:13] Degrau: 4 consumidor(es)
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-8720a0ec8869-ecb7be8f-724c-4f98-b316-630616873bc4 /172.19.0.12    consumer-8720a0ec8869 1               
+    smartfactory-processors consumer-c13150e881c0-d58e27ed-20f2-4169-8bf0-2d5858b0adf3 /172.19.0.10    consumer-c13150e881c0 0               
+    smartfactory-processors consumer-0f98f48425dd-855156eb-3ef8-4bce-a36b-ee3c4a6da74a /172.19.0.11    consumer-0f98f48425dd 1               
+    smartfactory-processors consumer-64dfaf0ab63f-cd78db37-9e20-44c2-b49f-79174bcdc5e8 /172.19.0.6     consumer-64dfaf0ab63f 1               
+    [PASS] Grupo com 4 membro(s)
+    [PASS] Consumidores ociosos = 1 (obtido: 1)
+    lote de 3000 mensagens esvaziado em 29s (~103 msg/s)
+
+>>> [00:59:51] Degrau: 5 consumidor(es)
+    
+    GROUP                   CONSUMER-ID                                                HOST            CLIENT-ID             #PARTITIONS     
+    smartfactory-processors consumer-8720a0ec8869-ecb7be8f-724c-4f98-b316-630616873bc4 /172.19.0.12    consumer-8720a0ec8869 0               
+    smartfactory-processors consumer-68bca6ad8c83-5f47e48c-45f5-42af-b7ff-57f79040db49 /172.19.0.13    consumer-68bca6ad8c83 1               
+    smartfactory-processors consumer-c13150e881c0-d58e27ed-20f2-4169-8bf0-2d5858b0adf3 /172.19.0.10    consumer-c13150e881c0 0               
+    smartfactory-processors consumer-0f98f48425dd-855156eb-3ef8-4bce-a36b-ee3c4a6da74a /172.19.0.11    consumer-0f98f48425dd 1               
+    smartfactory-processors consumer-64dfaf0ab63f-cd78db37-9e20-44c2-b49f-79174bcdc5e8 /172.19.0.6     consumer-64dfaf0ab63f 1               
+    [PASS] Grupo com 5 membro(s)
+    [PASS] Consumidores ociosos = 2 (obtido: 2)
+    lote de 3000 mensagens esvaziado em 25s (~120 msg/s)
+
+>>> [01:00:26] Resumo (lote de 3000 mensagens, 20 ms de processamento por mensagem)
+    consumidores | tempo p/ esvaziar | vazão (msg/s) | comentário
+    -------------+-------------------+---------------+------------------------------------------
+    1            | 72s | ~41 | 1 consumidor lê as 3 partições
+    2            | 49s | ~61 | um consumidor fica com 2 partições (gargalo)
+    3            | 29s | ~103 | 1 partição por consumidor (paralelismo máximo)
+    4            | 29s | ~103 | 4º consumidor ocioso (hot standby)
+    5            | 25s | ~120 | 4º e 5º ociosos
+    [PASS] 3 consumidores esvaziam a fila bem mais rápido que 1 (29s vs 72s, >= 1,8x)
+    [PASS] 2 consumidores ficam entre 1 e 3 (29s < 49s < 72s)
+    [PASS] Acima do número de partições não há ganho relevante: 4 consumidores (29s) vs 3 (29s)
+    [PASS] Acima do número de partições não há ganho relevante: 5 consumidores (25s) vs 3 (29s)
+
+================================================================================
+ RESULTADO: PASS (14/14 verificações)  |  evidência: reports/logs/T5_elasticidade.log
+================================================================================
+
+>>> Restaurando 3 consumidores sem custo simulado

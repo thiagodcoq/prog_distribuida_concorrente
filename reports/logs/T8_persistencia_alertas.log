@@ -1,0 +1,35 @@
+================================================================================
+ T8: PERSISTÊNCIA DOS ALERTAS
+================================================================================
+Data/hora (UTC) : 2026-09-26T01:04:40Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : nenhum
+================================================================================
+
+>>> [01:04:40] Aguardando existir ao menos um alerta
+    [PASS] Arquivo de alertas existe e tem registros
+
+>>> [01:04:40] Arquivo compartilhado entre réplicas (mesmo volume)
+    linhas vistas por smartfactory-consumer-3: 230 | smartfactory-consumer-4: 230 | smartfactory-consumer-5: 230
+    [PASS] As 3 réplicas enxergam o mesmo arquivo (diferença <= 5 linhas por timing)
+
+>>> [01:04:40] Últimos alertas (JSON) e produtores por severidade
+    {"timestamp": "2026-09-26T01:04:30.895285+00:00", "consumer_id": "consumer-119e6ed3a6a2", "partition": 0, "offset": 38170, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Temperatura CRÍTICA (118.4°C >= 85.0°C
+    {"timestamp": "2026-09-26T01:04:36.898286+00:00", "consumer_id": "consumer-119e6ed3a6a2", "partition": 0, "offset": 38173, "severity": "CRITICAL", "sensor_id": "sensor-usinagem-01", "setor": "linha_producao", "reasons": ["Temperatura CRÍTICA (90.4°C >= 85.0°C)
+    {"timestamp": "2026-09-26T01:04:38.369621+00:00", "consumer_id": "consumer-bf999ba3130e", "partition": 1, "offset": 39795, "severity": "CRITICAL", "sensor_id": "sensor-forno-01", "setor": "fundicao", "reasons": ["Temperatura CRÍTICA (109.2°C >= 85.0°C)", "Vibr
+    CRITICAL: 211
+    WARNING : 19
+    réplicas que gravaram (consumer_id distintos): 11
+
+>>> [01:04:40] Reiniciando todos os consumidores (docker compose restart consumer)
+    [PASS] Grupo volta a ter 3 consumidores
+    linhas antes: 230 | logo após o restart: 232
+    [PASS] Arquivo NÃO foi truncado pelo restart (232 >= 230)
+    [PASS] Novos alertas continuam sendo anexados após o restart
+    linhas agora: 233
+
+================================================================================
+ RESULTADO: PASS (5/5 verificações)  |  evidência: reports/logs/T8_persistencia_alertas.log
+================================================================================

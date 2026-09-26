@@ -1,0 +1,97 @@
+================================================================================
+ T3: FALHA DE BROKER KAFKA (modo: graceful, alvo: follower)
+================================================================================
+Data/hora (UTC) : 2026-09-26T00:53:34Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : modo=graceful alvo=follower
+================================================================================
+
+>>> [00:53:34] Pré-condições
+    [PASS] 3 brokers em execução
+    [PASS] ISR completo em todas as partições
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 1	Replicas: 1,2,3	Isr: 1,2,3
+    	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,3,1
+    	Topic: dados-sensores	Partition: 2	Leader: 3	Replicas: 3,1,2	Isr: 3,1,2
+    ClusterId:              Some(4L622nShTUiBenYhCy-0bw)
+    LeaderId:               2
+    LeaderEpoch:            1
+    HighWatermark:          322
+    MaxFollowerLag:         0
+    MaxFollowerLagTimeMs:   335
+    CurrentVoters:          [1,2,3]
+    CurrentObservers:       []
+    Líder do quórum KRaft antes da falha: broker 2 (epoch 1)
+    Broker a derrubar: kafka-1 | perf-test executa em: kafka-2
+
+>>> [00:53:42] Preparando tópico de verificação de perda (teste-perda, P=3, R=3)
+    Created topic teste-perda.
+    end offsets de teste-perda antes: 0
+
+>>> [00:53:46] Iniciando carga contínua: 1500 msgs a 50 msg/s (acks=all, idempotente)
+
+>>> [00:53:55] Derrubando kafka-1 (modo graceful)
+    00:53:56 kafka-1 fora do ar
+
+>>> [00:53:56] Failover das lideranças de partição
+    [PASS] Nenhuma partição lidera no broker caído; novos líderes eleitos em 3s
+    [PASS] ISR reduzido a 2 réplicas em todas as partições (>= min.insync.replicas=2)
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 2	Replicas: 1,2,3	Isr: 2,3
+    	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,3
+    	Topic: dados-sensores	Partition: 2	Leader: 3	Replicas: 3,1,2	Isr: 3,2
+
+>>> [00:54:03] Quórum KRaft com o broker fora
+    [PASS] Quórum mantém líder após a queda: broker 2 (epoch 1) com 2 de 3 votantes
+    ClusterId:              Some(4L622nShTUiBenYhCy-0bw)
+    LeaderId:               2
+    LeaderEpoch:            1
+    HighWatermark:          443
+    MaxFollowerLag:         25
+    MaxFollowerLagTimeMs:   12065
+    CurrentVoters:          [1,2,3]
+    CurrentObservers:       []
+
+>>> [00:54:08] Sensores e consumidores continuam funcionando durante a falha
+    [PASS] Produtores seguem gravando em dados-sensores durante a falha (offsets totais: 239 -> 268)
+    [PASS] 4 produtores continuam em execução (nenhum caiu)
+    [PASS] 3 consumidores no grupo e lag <= 30
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  1          130             131             1               consumer-a7cd003a25d8-a6e37fb9-cd78-49ab-a3ac-ae8e86bfad36 /172.19.0.11    consumer-a7cd003a25d8
+    smartfactory-processors dados-sensores  0          72              73              1               consumer-5015dd5001f7-411acd2d-bc76-443d-82db-2a0390d6432e /172.19.0.6     consumer-5015dd5001f7
+    smartfactory-processors dados-sensores  2          72              73              1               consumer-ffdcc7717d15-b3a61679-ae2b-4bb3-ae6d-f589ce1310fa /172.19.0.10    consumer-ffdcc7717d15
+
+>>> [00:54:14] Aguardando o fim da carga contínua (perf-test)
+    251 records sent, 50.0 records/sec (0.01 MB/sec), 2.8 ms avg latency, 59.0 ms max latency.
+    250 records sent, 50.0 records/sec (0.01 MB/sec), 2.8 ms avg latency, 18.0 ms max latency.
+    1500 records sent, 50.001667 records/sec (0.01 MB/sec), 4.61 ms avg latency, 276.00 ms max latency, 3 ms 50th, 8 ms 95th, 59 ms 99th, 132 ms 99.9th.
+    [PASS] perf-test terminou com sucesso (exit 0): todas as mensagens confirmadas com acks=all
+    end offsets de teste-perda depois: 1500 (delta = 1500; enviadas = 1500)
+    [PASS] Zero perda e zero duplicação: delta de offsets (1500) == mensagens enviadas (1500)
+
+>>> [00:54:18] Integridade da telemetria dos sensores durante a falha
+    Lotes descartados pelos produtores dos sensores desde 2026-09-26T00:53:55Z: 0
+    [PASS] Nenhuma leitura de sensor descartada (0 erros assíncronos de envio)
+
+>>> [00:54:18] Recuperando kafka-1
+    [PASS] ISR completo novamente (3 réplicas) em 8s após religar kafka-1
+    Topic: dados-sensores	TopicId: ld0-CGYQT72Yum8w3ASlNQ	PartitionCount: 3	ReplicationFactor: 3	Configs: min.insync.replicas=2
+    	Topic: dados-sensores	Partition: 0	Leader: 2	Replicas: 1,2,3	Isr: 2,3,1
+    	Topic: dados-sensores	Partition: 1	Leader: 2	Replicas: 2,3,1	Isr: 2,3,1
+    	Topic: dados-sensores	Partition: 2	Leader: 3	Replicas: 3,1,2	Isr: 3,2,1
+    [PASS] kafka-1 saudável novamente (healthcheck)
+    ClusterId:              Some(4L622nShTUiBenYhCy-0bw)
+    LeaderId:               2
+    LeaderEpoch:            1
+    HighWatermark:          543
+    MaxFollowerLag:         0
+    MaxFollowerLagTimeMs:   236
+    CurrentVoters:          [1,2,3]
+    CurrentObservers:       []
+
+================================================================================
+ RESULTADO: PASS (13/13 verificações)  |  evidência: reports/logs/T3_falha_broker_graceful_follower.log
+================================================================================

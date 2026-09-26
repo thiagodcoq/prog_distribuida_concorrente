@@ -1,0 +1,38 @@
+================================================================================
+ T6: ESCALA DE SENSORES (produtores)
+================================================================================
+Data/hora (UTC) : 2026-09-26T01:00:29Z
+Commit          : 3905ea1 (com alterações não commitadas)
+Tópico / grupo  : dados-sensores (P=3, R=3) / smartfactory-processors
+Session timeout : 10000 ms | Heartbeat: 3000 ms
+Argumentos      : janela=20s
+================================================================================
+
+>>> [01:00:29] Baseline: 4 sensores originais
+    4 sensores: +41 mensagens em 20s (~2 msg/s) | P0=+14 P1=+23 P2=+13
+    [PASS] Baseline gera mensagens (41)
+
+>>> [01:00:59] Escalando para +4 sensores (8 no total)
+    sensor-extra em execução: 4
+    8 sensores: +79 mensagens em 20s (~3 msg/s) | P0=+26 P1=+49 P2=+26
+    [PASS] Vazão com +4 sensores (79) cresce mais de 60% sobre o baseline (41)
+    [PASS] Todas as 3 partições recebem dados com 8 sensores
+    [PASS] Consumidores acompanham (lag <= 30)
+
+>>> [01:01:43] Escalando para +8 sensores (12 no total)
+    sensor-extra em execução: 8
+    12 sensores: +124 mensagens em 20s (~6 msg/s) | P0=+39 P1=+62 P2=+52
+    [PASS] Vazão com +8 sensores (124) cresce mais de 120% sobre o baseline (41)
+    [PASS] Todas as 3 partições recebem dados com 12 sensores
+    [PASS] Consumidores acompanham (lag <= 30)
+
+>>> [01:02:27] Consumer group após a escala
+    
+    GROUP                   TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                HOST            CLIENT-ID
+    smartfactory-processors dados-sensores  2          38598           38602           4               consumer-debd217071db-8cd5b2e7-2460-4f27-928b-defaf4476978 /172.19.0.11    consumer-debd217071db
+    smartfactory-processors dados-sensores  0          38104           38108           4               consumer-119e6ed3a6a2-92bfa627-5d65-4480-aa65-884db0c3e87a /172.19.0.10    consumer-119e6ed3a6a2
+    smartfactory-processors dados-sensores  1          39770           39771           1               consumer-bf999ba3130e-dc562736-b306-4cb3-b629-02ec82d1925d /172.19.0.6     consumer-bf999ba3130e
+
+================================================================================
+ RESULTADO: PASS (7/7 verificações)  |  evidência: reports/logs/T6_escala_sensores.log
+================================================================================
