@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T1: Balanceamento automático de carga entre consumidores (Objetivo 3)
 #
 # Com 3 consumidores no mesmo grupo e 3 partições, cada consumidor deve receber
@@ -7,7 +6,6 @@
 # distribuídos por chave). Mostra também a atribuição registrada pelo
 # ConsumerRebalanceListener e quais sensores caem em cada partição.
 # Pré-requisito: make up (3 consumidores)
-# ==============================================================================
 SCRIPT_ARGS="$*"
 source "$(dirname "$0")/lib.sh"
 ensure_stack_up

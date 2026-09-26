@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T3: Falha de broker Kafka e failover (Objetivo 4 do enunciado)
 #
 # Uso: ./scripts/simulate_broker_failure.sh [graceful|hard] [controller|follower]
@@ -13,7 +12,6 @@
 # NENHUMA mensagem foi perdida nem duplicada durante a queda. Depois religa o broker
 # e confere a ressincronização do ISR.
 # Pré-requisito: make up
-# ==============================================================================
 MODE="${1:-graceful}"
 TARGET_KIND="${2:-controller}"
 LOSS_TOPIC="${LOSS_TOPIC:-teste-perda}"

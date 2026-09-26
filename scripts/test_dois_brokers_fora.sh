@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T7: Limite de tolerância a falhas: 2 de 3 brokers fora
 #
 # O cluster tolera a queda de UM broker (quórum KRaft 2 de 3; min.insync.replicas=2).
@@ -9,7 +8,6 @@
 # Serve de evidência para a seção "o que não funcionou / limitações" do relatório.
 # Uso: ./scripts/test_dois_brokers_fora.sh
 # Pré-requisito: make up
-# ==============================================================================
 OUTAGE_S="${OUTAGE_S:-50}"
 SCRIPT_ARGS="indisponibilidade=${OUTAGE_S}s"
 source "$(dirname "$0")/lib.sh"

@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # run_all_tests.sh: executa toda a suíte de testes em sequência (make test-all).
 #
 # Assume o cluster no ar (make up). Cada teste grava sua evidência em reports/logs/.
 # Ao final imprime uma tabela PASS/FAIL e grava reports/logs/RESULTADO_TESTES.txt.
 # Sai com código != 0 se algum teste falhar.
-# ==============================================================================
 source "$(dirname "$0")/lib.sh"
 ensure_stack_up
 

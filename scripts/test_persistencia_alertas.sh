@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T8: Persistência e compartilhamento dos alertas (Componente 4: banco de dados/logger)
 #
 # Os consumidores gravam anomalias em /var/log/smartfactory/alerts.log, num volume
@@ -7,7 +6,6 @@
 # sobrevive à reinicialização dos consumidores e que continua recebendo alertas.
 # Uso: ./scripts/test_persistencia_alertas.sh
 # Pré-requisito: make up
-# ==============================================================================
 SCRIPT_ARGS="$*"
 source "$(dirname "$0")/lib.sh"
 ensure_stack_up

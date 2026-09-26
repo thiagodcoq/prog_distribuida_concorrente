@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Módulo de Processamento de Dados e Detecção de Anomalias para SmartFactory.
+Processador de telemetria da SmartFactory.
 
-Este módulo consome dados de telemetria industrial enviados pelos sensores IoT ao
-cluster Apache Kafka. Ele pertence a um Consumer Group unificado ('smartfactory-processors'),
-permitindo balanceamento automático de partições, elasticidade horizontal e tolerância a falhas.
-Implementa um ConsumerRebalanceListener para evidenciar rebalanceamentos em tempo real
-e realiza a validação de parâmetros físicos (temperatura, vibração e potência),
-registrando ocorrências normais em stdout e anomalias críticas/avisos em arquivo compartilhado.
+Lê as leituras dos sensores no tópico do Kafka e classifica cada uma como NORMAL, WARNING ou
+CRITICAL. Todas as réplicas usam o mesmo consumer group, então o Kafka reparte as partições
+entre elas e refaz a divisão quando uma réplica entra ou sai. As leituras vão para o log
+(stdout) e as anomalias também para um arquivo de alertas compartilhado entre as réplicas.
 
-Disciplina: Distribuição e Concorrência (PUC)
-Data: 2026
+Toda a configuração vem de variáveis de ambiente (ver config/sensor_thresholds.env).
 """
 
 import json
@@ -39,34 +36,29 @@ logger = logging.getLogger("DataProcessor")
 
 class SmartFactoryRebalanceListener(ConsumerRebalanceListener):
     """
-    Listener customizado para eventos de rebalanceamento do grupo de consumidores Kafka.
+    Registra no log quando o grupo tira ou dá partições a este consumidor.
 
-    Captura os momentos exatos em que partições são revogadas ou atribuídas a esta
-    instância de consumidor, registrando detalhes completos (nomes de tópicos, IDs de partições,
-    identificador do consumidor e carimbo de data/hora) com formatação visual destacada.
+    As mensagens do rebalanceamento (REVOKED e ASSIGNED) são a evidência usada nos testes
+    de falha de consumidor e de elasticidade.
 
     Attributes:
-        consumer_id (str): Identificador exclusivo deste consumidor na topologia.
+        consumer_id (str): Identificador deste consumidor, incluído em cada mensagem.
     """
 
     def __init__(self, consumer_id: str) -> None:
         """
-        Inicializa o listener de rebalanceamento com o identificador do consumidor.
-
         Args:
-            consumer_id (str): Nome ou identificador da instância do consumidor.
+            consumer_id (str): Identificador do consumidor dono do listener.
         """
         super().__init__()
         self.consumer_id: str = consumer_id
 
     def on_partitions_revoked(self, revoked: Set[TopicPartition]) -> None:
         """
-        Callback disparado antes que o Kafka revogue partições deste consumidor.
-
-        Indica que uma renegociação do grupo foi iniciada (ex: adição ou remoção de nós).
+        Chamado quando o Kafka vai retirar partições deste consumidor (início de um rebalanceamento).
 
         Args:
-            revoked (Set[TopicPartition]): Conjunto de partições anteriormente atribuídas que foram revogadas.
+            revoked (Set[TopicPartition]): Partições retiradas.
         """
         part_list = [f"{tp.topic}-P{tp.partition}" for tp in revoked] if revoked else ["Nenhuma"]
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -89,12 +81,12 @@ class SmartFactoryRebalanceListener(ConsumerRebalanceListener):
 
     def on_partitions_assigned(self, assigned: Set[TopicPartition]) -> None:
         """
-        Callback disparado após o coordenador do Kafka concluir a atribuição de partições.
+        Chamado quando o rebalanceamento termina, com as partições que este consumidor passou a ter.
 
-        Confirma quais partições este consumidor específico ficou encarregado de processar.
+        Uma lista vazia significa que há mais consumidores que partições e este ficou ocioso.
 
         Args:
-            assigned (Set[TopicPartition]): Conjunto de partições atribuídas a este consumidor.
+            assigned (Set[TopicPartition]): Partições atribuídas.
         """
         part_list = [f"{tp.topic}-P{tp.partition}" for tp in assigned] if assigned else ["Nenhuma (Ocioso/Standby)"]
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -119,51 +111,43 @@ class SmartFactoryRebalanceListener(ConsumerRebalanceListener):
 
 class SmartFactoryConsumer:
     """
-    Classe consumidora responsável por processar telemetria e detectar anomalias operacionais.
-
-    Conecta-se ao tópico de dados dos sensores utilizando o grupo compartilhado
-    'smartfactory-processors'. Analisa cada payload recebido contra os limites configurados
-    via variáveis de ambiente e grava registros de anomalia em arquivo compartilhado.
+    Uma réplica do processador: consome leituras, detecta anomalias e grava os alertas.
 
     Attributes:
-        bootstrap_servers (str): Endereços dos brokers Kafka.
-        topic (str): Nome do tópico consumido.
-        group_id (str): Identificador do Consumer Group.
-        consumer_id (str): Identificador desta réplica consumidora.
-        warn_temp (float): Limite de alerta amarelo para temperatura (°C).
-        max_temp (float): Limite crítico para temperatura (°C).
-        warn_vibration (float): Limite de alerta para vibração mecânica (mm/s).
-        max_vibration (float): Limite crítico para vibração mecânica (mm/s).
-        warn_power_kw (float): Limite de alerta para consumo energético (kW).
-        max_power_kw (float): Limite crítico para consumo energético (kW).
-        alert_log_path (str): Caminho absoluto do arquivo compartilhado de alertas.
-        auto_offset_reset (str): Onde começar a ler quando o grupo não tem offset salvo.
-        auto_commit_interval_ms (int): Intervalo (ms) do commit automático dos offsets consumidos.
-        session_timeout_ms (int): Tempo sem heartbeat (ms) após o qual o consumidor é dado como
-            falho e o grupo é rebalanceado.
-        heartbeat_interval_ms (int): Intervalo (ms) entre heartbeats enviados ao coordenador.
-        max_poll_interval_ms (int): Tempo máximo (ms) entre duas chamadas de poll.
-        metadata_max_age_ms (int): Idade máxima (ms) dos metadados antes de renová-los; evita buscar
+        bootstrap_servers (str): Brokers do cluster, separados por vírgula.
+        topic (str): Tópico consumido.
+        group_id (str): Consumer group compartilhado por todas as réplicas.
+        consumer_id (str): Identificador desta réplica.
+        warn_temp, max_temp (float): Limites de aviso e crítico de temperatura (°C).
+        warn_vibration, max_vibration (float): Limites de aviso e crítico de vibração (mm/s).
+        warn_power_kw, max_power_kw (float): Limites de aviso e crítico de consumo (kW).
+        alert_log_path (str): Arquivo de alertas, num volume compartilhado entre as réplicas.
+        auto_offset_reset (str): Onde começar quando o grupo ainda não tem offset salvo.
+        auto_commit_interval_ms (int): Intervalo (ms) do commit automático dos offsets.
+        session_timeout_ms (int): Tempo (ms) sem heartbeat até o grupo dar esta réplica como
+            morta e rebalancear.
+        heartbeat_interval_ms (int): Intervalo (ms) entre heartbeats ao coordenador.
+        max_poll_interval_ms (int): Tempo máximo (ms) permitido entre dois polls.
+        metadata_max_age_ms (int): Idade máxima (ms) dos metadados. Um valor baixo evita buscar
             em um broker que já caiu depois de um failover.
-        poll_timeout_ms (int): Tempo de espera (ms) de cada poll, curto para reagir a sinais de parada.
-        poll_max_records (int): Máximo de registros devolvidos por poll.
-        processing_delay_seg (float): Custo simulado de processamento por mensagem, em segundos
-            (0 desliga; usado no teste de elasticidade).
-        connect_max_retries (int): Número máximo de tentativas de conexão ao cluster.
+        poll_timeout_ms (int): Quanto (ms) cada poll espera por mensagens; curto para o laço
+            reagir a sinais de parada.
+        poll_max_records (int): Máximo de registros por poll.
+        processing_delay_seg (float): Custo simulado por mensagem, em segundos (0 = desligado);
+            usado no teste de elasticidade.
+        connect_max_retries (int): Tentativas de conexão ao cluster.
         connect_retry_delay (float): Espera inicial (s) entre tentativas; dobra a cada falha.
-        connect_retry_max_delay (float): Limite (s) da espera entre tentativas de conexão.
-        running (bool): Flag de controle do ciclo de execução.
-        consumer (KafkaConsumer): Instância do consumidor Kafka.
+        connect_retry_max_delay (float): Teto (s) da espera entre tentativas.
+        running (bool): False depois de um SIGINT/SIGTERM, para o laço principal terminar.
+        consumer (KafkaConsumer): Cliente do Kafka (criado em connect()).
     """
 
     def __init__(self) -> None:
         """
-        Inicializa o consumidor carregando as variáveis de ambiente e criando os limites.
+        Lê a configuração das variáveis de ambiente.
 
-        O identificador do consumidor é CONSUMER_ID ou, na falta dele, `consumer-<hostname>`
-        (o hostname de um container é o seu ID curto). Os limites de alarme, o caminho do arquivo
-        de alertas e os parâmetros do cliente Kafka (detecção de falha, commit, polling e
-        reconexão com recuo exponencial) vêm todos de variáveis de ambiente.
+        Sem CONSUMER_ID, o identificador é `consumer-<hostname>` (o hostname de um container
+        é o seu ID curto).
         """
         self.bootstrap_servers: str = os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS", "kafka-1:9092,kafka-2:9092,kafka-3:9092"
@@ -232,19 +216,18 @@ class SmartFactoryConsumer:
         )
 
     def _setup_signal_handlers(self) -> None:
-        """
-        Configura os tratadores de interrupção (SIGINT, SIGTERM) para desconexão graciosa.
-        """
+        """Faz SIGINT e SIGTERM encerrarem o laço principal de forma limpa."""
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum: int, frame: Any) -> None:
         """
-        Tratador de sinal que interrompe o loop e força o consumidor a sair do grupo.
+        Trata o sinal de parada marcando `running` como False; o laço termina e close() avisa o
+        grupo que esta réplica está saindo.
 
         Args:
-            signum (int): Código numérico do sinal POSIX.
-            frame (Any): Quadro de execução no momento do disparo.
+            signum (int): Número do sinal recebido.
+            frame (Any): Frame de execução no momento do sinal (não usado).
         """
         logger.warning(
             "Sinal de término capturado (%d). Realizando shutdown gracioso do consumidor %s...",
@@ -255,14 +238,13 @@ class SmartFactoryConsumer:
 
     def connect(self) -> None:
         """
-        Conecta ao cluster Apache Kafka com assinatura no tópico e registro do listener.
+        Conecta ao Kafka e assina o tópico com o listener de rebalanceamento.
 
-        Em caso de falha, a espera entre tentativas começa em `connect_retry_delay`, dobra
-        a cada erro e é limitada a `connect_retry_max_delay` (recuo exponencial), até
-        `connect_max_retries` tentativas.
+        Se o cluster não responde, tenta de novo: a espera começa em `connect_retry_delay`,
+        dobra a cada falha e fica limitada a `connect_retry_max_delay`.
 
         Raises:
-            SystemExit: Se o cluster estiver inacessível após todas as tentativas.
+            SystemExit: Se as `connect_max_retries` tentativas se esgotarem.
         """
         max_retries = self.connect_max_retries
         retries = 0
@@ -278,14 +260,11 @@ class SmartFactoryConsumer:
                 )
                 def _safe_deserialize(m: bytes) -> Optional[Dict[str, Any]]:
                     """
-                    Converte o corpo de uma mensagem em dicionário sem nunca lançar exceção.
+                    Decodifica o JSON da mensagem; devolve None (sem lançar exceção) se estiver
+                    vazia ou inválida, como o tráfego de teste do kafka-producer-perf-test.
 
                     Args:
-                        m (bytes): Valor bruto da mensagem Kafka.
-
-                    Returns:
-                        Optional[Dict[str, Any]]: O JSON decodificado, ou None se a mensagem
-                        estiver vazia ou não for um JSON válido (tráfego de benchmark, por exemplo).
+                        m (bytes): Valor bruto da mensagem.
                     """
                     if not m:
                         return None
@@ -329,20 +308,18 @@ class SmartFactoryConsumer:
 
     def evaluate_telemetry(self, data: Dict[str, Any]) -> Tuple[str, List[str]]:
         """
-        Avalia as métricas do sensor contra as regras de detecção de anomalia.
+        Classifica uma leitura comparando cada grandeza com seus limites.
 
-        Cada grandeza (temperatura, vibração e consumo) é comparada com dois limites inclusivos:
-        igual ou acima do limite de aviso gera `WARNING`; igual ou acima do crítico gera
-        `CRITICAL`. A severidade final é a mais alta entre as três grandezas e cada violação
-        acrescenta uma descrição à lista de motivos.
+        Os limites são inclusivos: valor igual ou acima do limite de aviso dá WARNING, e igual ou
+        acima do crítico dá CRITICAL. A severidade final é a mais alta entre temperatura,
+        vibração e consumo, e cada violação acrescenta um motivo à lista.
 
         Args:
-            data (Dict[str, Any]): Dicionário com as métricas do sensor.
+            data (Dict[str, Any]): A leitura (chaves `temperatura`, `vibracao` e `consumo_energia_kw`).
 
         Returns:
-            Tuple[str, List[str]]:
-                - Status de severidade ('NORMAL', 'WARNING' ou 'CRITICAL').
-                - Lista de descrições das infrações detectadas (caso existam).
+            Tuple[str, List[str]]: A severidade ('NORMAL', 'WARNING' ou 'CRITICAL') e a lista de
+            motivos (vazia se NORMAL).
         """
         reasons: List[str] = []
         severity = "NORMAL"
@@ -386,14 +363,16 @@ class SmartFactoryConsumer:
         offset: int,
     ) -> None:
         """
-        Registra um evento anômalo no arquivo persistente de alertas compartilhados.
+        Acrescenta o alerta, como uma linha JSON, ao arquivo de alertas.
+
+        Uma falha ao gravar só é registrada no log; não interrompe o consumo.
 
         Args:
-            severity (str): Categoria do alerta ('WARNING' ou 'CRITICAL').
-            reasons (List[str]): Lista de motivos da anomalia.
-            data (Dict[str, Any]): Conteúdo completo da telemetria recebida.
-            partition (int): Partição Kafka de onde o evento se originou.
-            offset (int): Posição do offset da mensagem processada.
+            severity (str): 'WARNING' ou 'CRITICAL'.
+            reasons (List[str]): Motivos do alerta.
+            data (Dict[str, Any]): A leitura original.
+            partition (int): Partição de onde a mensagem veio.
+            offset (int): Offset da mensagem na partição.
         """
         alert_record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -417,13 +396,11 @@ class SmartFactoryConsumer:
 
     def run(self) -> None:
         """
-        Executa o loop contínuo de polling e consumo de mensagens do Apache Kafka.
+        Conecta e consome mensagens até receber um sinal de parada.
 
-        Processa registros em lotes curtos, avalia cada telemetria, atualiza logs estruturados
-        e registra alertas caso anomalias operacionais sejam identificadas. O poll usa um
-        timeout curto para que o laço reaja rapidamente aos sinais de parada. Mensagens que não
-        são um JSON de telemetria (por exemplo, tráfego de benchmark) são descartadas; leituras
-        normais vão para o log e as anômalas também para o arquivo compartilhado de alertas.
+        Cada leitura é classificada e registrada no log; as anômalas também vão para o arquivo de
+        alertas. Mensagens que não são um JSON de telemetria são ignoradas. O poll tem timeout
+        curto para o laço perceber o sinal de parada logo.
         """
         self._setup_signal_handlers()
         self.connect()
@@ -502,9 +479,7 @@ class SmartFactoryConsumer:
             self.close()
 
     def close(self) -> None:
-        """
-        Fecha a conexão do consumidor Kafka e avisa o Group Coordinator para rebalanceamento imediato.
-        """
+        """Sai do grupo e fecha a conexão, o que faz o Kafka rebalancear na hora."""
         if self.consumer:
             logger.info("Desconectando consumidor %s e liberando partições...", self.consumer_id)
             try:
@@ -515,9 +490,7 @@ class SmartFactoryConsumer:
 
 
 def main() -> None:
-    """
-    Ponto de entrada do script consumidor.
-    """
+    """Cria a réplica a partir do ambiente e a executa."""
     consumer = SmartFactoryConsumer()
     consumer.run()
 

@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # Diagnóstico e verificação de saúde do cluster SmartFactory (make health)
 #
 # Somente leitura: mostra containers, quórum KRaft, tópico (líderes/ISR), consumer
 # group (distribuição e lag) e um resumo do arquivo compartilhado de alertas.
 # Não faz asserções (para isso, veja test_cluster_inicial.sh).
-# ==============================================================================
 SCRIPT_ARGS="$*"
 source "$(dirname "$0")/lib.sh"
 

@@ -1,9 +1,7 @@
-# ==============================================================================
 # Makefile para o Trabalho 1 de Distribuição e Concorrência
 # Sistema SmartFactory IoT com Apache Kafka em Modo KRaft
 #
 # Parâmetros (tópico, partições, grupo...) vêm de config/sensor_thresholds.env.
-# ==============================================================================
 
 include config/sensor_thresholds.env
 

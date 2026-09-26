@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T0: Estado inicial do cluster (Objetivo 1 do enunciado)
 #
 # Verifica, com asserções, que o cluster subiu como projetado: 3 brokers KRaft
 # saudáveis, quórum de 3 votantes, tópico com P/R/ISR configurados e réplicas em
 # sincronia, produtores e consumidores em execução e dados chegando nas 3 partições.
 # Pré-requisito: make up
-# ==============================================================================
 SCRIPT_ARGS="$*"
 source "$(dirname "$0")/lib.sh"
 ensure_stack_up

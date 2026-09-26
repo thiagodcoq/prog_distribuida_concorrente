@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T5: Elasticidade horizontal dos consumidores (Requisito de escala + Objetivo 3)
 #
 # Com um custo simulado por mensagem (PROCESSING_DELAY_MS), injeta o MESMO lote de
@@ -10,7 +9,6 @@
 # Uso: ./scripts/test_elasticidade.sh
 # Variáveis: ELASTIC_DELAY_MS (padrão 20), ELASTIC_RECORDS (padrão 3000)
 # Pré-requisito: make up
-# ==============================================================================
 DELAY="${ELASTIC_DELAY_MS:-20}"
 BATCH="${ELASTIC_RECORDS:-3000}"
 SCRIPT_ARGS="PROCESSING_DELAY_MS=$DELAY lote=$BATCH"

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # T6: Escala de sensores/produtores (Requisito "escale conforme o número de sensores aumenta")
 #
 # Mede a taxa de mensagens que chegam ao tópico com os 4 sensores originais e depois
@@ -8,7 +7,6 @@
 # (chave = sensor_id) e que os consumidores acompanham sem acumular lag.
 # Uso: ./scripts/test_escala_sensores.sh
 # Pré-requisito: make up
-# ==============================================================================
 WINDOW="${WINDOW_S:-20}"
 SCRIPT_ARGS="janela=${WINDOW}s"
 source "$(dirname "$0")/lib.sh"
